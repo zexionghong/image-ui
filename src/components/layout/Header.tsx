@@ -10,6 +10,8 @@ export function Header() {
 
   const pageTitle = (() => {
     if (pathname.includes('/gallery')) return t('gallery')
+    if (pathname.includes('/video-generate')) return t('videoGenerate')
+    if (pathname.includes('/workflow')) return t('workflow')
     if (pathname.includes('/generate')) return t('generate')
     if (pathname.includes('/settings')) return t('settings')
     if (pathname.includes('/editor')) return t('editor')

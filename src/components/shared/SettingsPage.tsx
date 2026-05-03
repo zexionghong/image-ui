@@ -13,17 +13,28 @@ import { toast } from 'sonner'
 
 export function SettingsPage() {
   const t = useTranslations('settings')
-  const { baseUrl, apiKey, model, setBaseUrl, setApiKey, setModel } = useApiConfigStore()
+  const { baseUrl, apiKey, model, videoBaseUrl, videoApiKey, videoModel, setBaseUrl, setApiKey, setModel, setVideoBaseUrl, setVideoApiKey, setVideoModel } = useApiConfigStore()
   const { theme, toggle } = useThemeStore()
   const [showKey, setShowKey] = useState(false)
+  const [showVideoKey, setShowVideoKey] = useState(false)
   const [localUrl, setLocalUrl] = useState(baseUrl)
   const [localKey, setLocalKey] = useState(apiKey)
   const [localModel, setLocalModel] = useState(model)
+  const [localVideoUrl, setLocalVideoUrl] = useState(videoBaseUrl)
+  const [localVideoKey, setLocalVideoKey] = useState(videoApiKey)
+  const [localVideoModel, setLocalVideoModel] = useState(videoModel)
 
   const handleSave = () => {
     setBaseUrl(localUrl)
     setApiKey(localKey)
     setModel(localModel)
+    toast.success(t('apiSaved'))
+  }
+
+  const handleVideoSave = () => {
+    setVideoBaseUrl(localVideoUrl)
+    setVideoApiKey(localVideoKey)
+    setVideoModel(localVideoModel)
     toast.success(t('apiSaved'))
   }
 
@@ -95,6 +106,71 @@ export function SettingsPage() {
 
           <div className="flex justify-end pt-2">
             <Button variant="gradient" onClick={handleSave}>
+              <Save className="h-4 w-4 mr-1.5" />
+              {t('apiSaved').replace('已保存', '保存').replace('saved', 'Save')}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Video API Config */}
+      <Card>
+        <CardHeader>
+          <CardTitle>{t('videoApiSection')}</CardTitle>
+          <CardDescription>{t('videoApiDesc')}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-1.5">
+            <Label>{t('videoBaseUrl')}</Label>
+            <p className="text-xs text-muted-foreground">{t('videoBaseUrlDesc')}</p>
+            <Input
+              value={localVideoUrl}
+              onChange={(e) => setLocalVideoUrl(e.target.value)}
+              placeholder={t('videoBaseUrlPlaceholder')}
+              className="font-mono text-sm"
+            />
+          </div>
+
+          <Separator />
+
+          <div className="space-y-1.5">
+            <Label>{t('videoApiKey')}</Label>
+            <p className="text-xs text-muted-foreground">{t('videoApiKeyDesc')}</p>
+            <div className="relative">
+              <Input
+                type={showVideoKey ? 'text' : 'password'}
+                value={localVideoKey}
+                onChange={(e) => setLocalVideoKey(e.target.value)}
+                placeholder={t('videoApiKeyPlaceholder')}
+                className="font-mono text-sm pr-10"
+              />
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                type="button"
+                className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
+                onClick={() => setShowVideoKey(!showVideoKey)}
+              >
+                {showVideoKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+              </Button>
+            </div>
+          </div>
+
+          <Separator />
+
+          <div className="space-y-1.5">
+            <Label>{t('videoModel')}</Label>
+            <p className="text-xs text-muted-foreground">{t('videoModelDesc')}</p>
+            <Input
+              value={localVideoModel}
+              onChange={(e) => setLocalVideoModel(e.target.value)}
+              placeholder={t('videoModelPlaceholder')}
+              className="font-mono text-sm"
+            />
+          </div>
+
+          <div className="flex justify-end pt-2">
+            <Button variant="gradient" onClick={handleVideoSave}>
               <Save className="h-4 w-4 mr-1.5" />
               {t('apiSaved').replace('已保存', '保存').replace('saved', 'Save')}
             </Button>

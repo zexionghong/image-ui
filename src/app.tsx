@@ -6,6 +6,8 @@ import { AppLayout } from '@/components/layout/AppLayout'
 import { GalleryPage } from '@/components/gallery/GalleryPage'
 import { EditorPage } from '@/components/editor/EditorPage'
 import { GeneratePage } from '@/components/generate/GeneratePage'
+import { VideoGeneratePage } from '@/components/video/VideoGeneratePage'
+import { WorkflowPage } from '@/components/workflow/WorkflowPage'
 import { SettingsPage } from '@/components/shared/SettingsPage'
 import { I18nProvider } from '@/i18n/compat/client'
 import { locales, defaultLocale, type Locale } from '@/i18n/config'
@@ -116,10 +118,32 @@ const settingsRoute = createRoute({
   ),
 })
 
+// Video Generate
+const videoGenerateRoute = createRoute({
+  getParentRoute: () => localeRoute,
+  path: '/video-generate',
+  component: () => (
+    <AppLayout>
+      <VideoGeneratePage />
+    </AppLayout>
+  ),
+})
+
+// Workflow
+const workflowRoute = createRoute({
+  getParentRoute: () => localeRoute,
+  path: '/workflow',
+  component: () => (
+    <AppLayout>
+      <WorkflowPage />
+    </AppLayout>
+  ),
+})
+
 // Build route tree
 const routeTree = rootRoute.addChildren([
   indexRoute,
-  localeRoute.addChildren([galleryRoute, editorRoute, generateRoute, settingsRoute]),
+  localeRoute.addChildren([galleryRoute, editorRoute, generateRoute, videoGenerateRoute, workflowRoute, settingsRoute]),
 ])
 
 const router = createRouter({ routeTree })

@@ -6,6 +6,8 @@ import { fileURLToPath } from 'url'
 import imagesRouter from './routes/images.js'
 import generateRouter from './routes/generate.js'
 import editRouter from './routes/edit.js'
+import videoRouter from './routes/video.js'
+import workflowRouter from './routes/workflow.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -32,6 +34,8 @@ app.use('/uploads', express.static(path.join(__dirname, '..', 'public', 'uploads
 app.use('/api/images', imagesRouter)
 app.use('/api/generate', generateRouter)
 app.use('/api/edit', editRouter)
+app.use('/api/video', videoRouter)
+app.use('/api/workflow', workflowRouter)
 
 // Health check
 app.get('/api/health', (_req, res) => {

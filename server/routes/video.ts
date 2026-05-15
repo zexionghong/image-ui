@@ -5,10 +5,41 @@ import path from 'path'
 import fs from 'fs'
 import db from '../db.js'
 
+type VideoMode = 't2v' | 'i2v' | 'first_last' | 'multimodal' | 'continue'
+
+type UploadedMedia = {
+  fieldname: string
+  mimetype: string
+  buffer: Buffer
+}
+
+type SeedanceGenerateInput = {
+  mode: VideoMode
+  prompt: string
+  duration: number
+  resolution: string
+  aspectRatio: string
+  seed?: number
+  watermark?: boolean
+  generateAudio?: boolean
+  callbackUrl?: string
+  model: string
+  advanced?: Record<string, unknown>
+  media: UploadedMedia[]
+}
+
 const uploadsDir = path.join(process.cwd(), 'public', 'uploads')
 fs.mkdirSync(uploadsDir, { recursive: true })
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } })
+// Task 2 wires this named multipart middleware into /generate.
+const videoUpload = upload.fields([
+  { name: 'sourceImage', maxCount: 1 },
+  { name: 'endFrame', maxCount: 1 },
+  { name: 'referenceImages', maxCount: 6 },
+  { name: 'referenceVideo', maxCount: 1 },
+  { name: 'referenceAudio', maxCount: 1 },
+])
 const router = Router()
 
 const ENV_API_KEY = process.env.ARK_API_KEY || process.env.OPENAI_API_KEY || ''
@@ -18,8 +49,89 @@ function resolveConfig(body: any) {
   return {
     baseUrl: body.videoBaseUrl || ENV_BASE_URL,
     apiKey: body.videoApiKey || ENV_API_KEY,
-    model: body.videoModel || 'seedance-2.0',
+    model: body.videoModel || 'doubao-seedance-2-0-260128',
   }
+}
+
+function asBoolean(value: unknown, fallback = false) {
+  if (value === undefined || value === null || value === '') return fallback
+  return value === true || value === 'true' || value === '1'
+}
+
+function asOptionalNumber(value: unknown) {
+  if (value === undefined || value === null || value === '') return undefined
+  const num = Number(value)
+  return Number.isFinite(num) ? num : undefined
+}
+
+function parseAdvancedJson(value: unknown) {
+  if (!value || typeof value !== 'string' || !value.trim()) return {}
+  const parsed = JSON.parse(value)
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Advanced JSON must be an object')
+  }
+  return parsed as Record<string, unknown>
+}
+
+function fileToContent(file: UploadedMedia, role?: string) {
+  return {
+    type: 'image_url',
+    image_url: {
+      url: `data:${file.mimetype || 'image/png'};base64,${file.buffer.toString('base64')}`,
+    },
+    ...(role ? { role } : {}),
+  }
+}
+
+function collectMedia(files: Express.Request['files']) {
+  const grouped = files as Record<string, Express.Multer.File[]> | undefined
+  const media: UploadedMedia[] = []
+  for (const list of Object.values(grouped || {})) {
+    for (const file of list) {
+      media.push({ fieldname: file.fieldname, mimetype: file.mimetype, buffer: file.buffer })
+    }
+  }
+  return media
+}
+
+function buildSeedanceRequestBody(input: SeedanceGenerateInput) {
+  if (!input.prompt.trim()) throw new Error('Prompt is required')
+
+  const sourceImages = input.media.filter((file) => file.fieldname === 'sourceImage')
+  const endFrames = input.media.filter((file) => file.fieldname === 'endFrame')
+  const referenceImages = input.media.filter((file) => file.fieldname === 'referenceImages')
+  const referenceVideos = input.media.filter((file) => file.fieldname === 'referenceVideo')
+  const referenceAudios = input.media.filter((file) => file.fieldname === 'referenceAudio')
+
+  if (input.mode === 'i2v' && sourceImages.length === 0) {
+    throw new Error('Source image is required for image-to-video')
+  }
+  if (input.mode === 'first_last' && (sourceImages.length === 0 || endFrames.length === 0)) {
+    throw new Error('Source image and end frame are required for first/last-frame video')
+  }
+
+  const content: any[] = [{ type: 'text', text: input.prompt }]
+  for (const file of sourceImages) content.push(fileToContent(file, 'source'))
+  for (const file of endFrames) content.push(fileToContent(file, 'end_frame'))
+  for (const file of referenceImages) content.push(fileToContent(file, 'reference'))
+
+  const body: Record<string, unknown> = {
+    model: input.model,
+    content,
+    resolution: input.resolution,
+    ratio: input.aspectRatio,
+    duration: input.duration,
+    ...input.advanced,
+  }
+
+  if (input.seed !== undefined) body.seed = input.seed
+  if (input.watermark !== undefined) body.watermark = input.watermark
+  if (input.generateAudio !== undefined) body.generate_audio = input.generateAudio
+  if (input.callbackUrl) body.callback_url = input.callbackUrl
+  if (referenceVideos.length > 0) body.reference_video = `data:${referenceVideos[0].mimetype};base64,${referenceVideos[0].buffer.toString('base64')}`
+  if (referenceAudios.length > 0) body.reference_audio = `data:${referenceAudios[0].mimetype};base64,${referenceAudios[0].buffer.toString('base64')}`
+
+  return body
 }
 
 // POST /api/video/generate
@@ -39,41 +151,54 @@ router.post('/generate', upload.single('image'), async (req, res) => {
   console.log(`[video] POST /generate | model=${config.model} | base=${config.baseUrl}`)
 
   try {
-    const content: Record<string, unknown> = {
-      type: 'video_generation',
-      prompt,
-      duration: Number(duration),
-      resolution,
-      aspect_ratio: aspectRatio,
-    }
+    const content: any[] = [
+      { type: 'text', text: prompt },
+    ]
 
-    // If image uploaded (I2V), convert to base64 data URL
+    // If image uploaded (I2V), add as image_url content item
     if (req.file) {
       const base64 = req.file.buffer.toString('base64')
       const mime = req.file.mimetype || 'image/png'
-      content.image_url = `data:${mime};base64,${base64}`
+      content.push({
+        type: 'image_url',
+        image_url: { url: `data:${mime};base64,${base64}` },
+      })
     }
 
-    const res = await fetch(`${config.baseUrl.replace(/\/+$/, '')}/contents/generations/tasks`, {
+    const requestBody = {
+      model: config.model,
+      content,
+      resolution,
+      ratio: aspectRatio,
+      duration: Number(duration),
+    }
+    console.log(`[video] Request metadata:`, {
+      model: requestBody.model,
+      resolution: requestBody.resolution,
+      ratio: requestBody.ratio,
+      duration: requestBody.duration,
+      contentCount: content.length,
+      hasImage: Boolean(req.file),
+    })
+
+    const apiRes = await fetch(`${config.baseUrl.replace(/\/+$/, '')}/contents/generations/tasks`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${config.apiKey}`,
       },
-      body: JSON.stringify({
-        model: config.model,
-        content,
-      }),
+      body: JSON.stringify(requestBody),
     })
 
-    if (!res.ok) {
-      const err = await res.text()
-      console.error(`[video] API error: ${res.status} ${err}`)
-      throw new Error(`API error: ${res.status} ${err}`)
+    if (!apiRes.ok) {
+      const err = await apiRes.text()
+      console.error(`[video] API error: ${apiRes.status} ${err}`)
+      throw new Error(`API error: ${apiRes.status} ${err}`)
     }
 
-    const data = await res.json()
-    console.log(`[video] Task submitted: ${data.id || data.task_id}`)
+    const data = await apiRes.json()
+    const taskId = data.id || data.task_id
+    console.log(`[video] Task submitted: ${taskId}`)
 
     // Save to history
     const paramsJson = JSON.stringify({ duration, resolution, aspectRatio, model: config.model, type: req.file ? 'i2v' : 't2v' })
@@ -83,7 +208,7 @@ router.post('/generate', upload.single('image'), async (req, res) => {
     ).run(prompt, paramsJson)
 
     res.json({
-      taskId: data.id || data.task_id,
+      taskId,
       status: 'submitted',
     })
   } catch (err: any) {

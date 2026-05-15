@@ -28,10 +28,19 @@ type SeedanceGenerateInput = {
   media: UploadedMedia[]
 }
 
+const VIDEO_MODES: VideoMode[] = ['t2v', 'i2v', 'first_last', 'multimodal', 'continue']
+const MAX_UPLOAD_BYTES = 120 * 1024 * 1024
+
 const uploadsDir = path.join(process.cwd(), 'public', 'uploads')
 fs.mkdirSync(uploadsDir, { recursive: true })
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } })
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 25 * 1024 * 1024,
+    files: 10,
+  },
+})
 // Task 2 wires this named multipart middleware into /generate.
 const videoUpload = upload.fields([
   { name: 'sourceImage', maxCount: 1 },
@@ -94,6 +103,27 @@ function collectMedia(files: Express.Request['files']) {
   return media
 }
 
+function isVideoMode(value: unknown): value is VideoMode {
+  return typeof value === 'string' && VIDEO_MODES.includes(value as VideoMode)
+}
+
+function assertHttpUrl(value: string, label: string) {
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    throw new Error(`${label} must be a valid URL`)
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error(`${label} must use http or https`)
+  }
+  return url.toString().replace(/\/+$/, '')
+}
+
+function getTotalMediaBytes(media: UploadedMedia[]) {
+  return media.reduce((total, file) => total + file.buffer.length, 0)
+}
+
 function buildSeedanceRequestBody(input: SeedanceGenerateInput) {
   if (!input.prompt.trim()) throw new Error('Prompt is required')
 
@@ -134,54 +164,94 @@ function buildSeedanceRequestBody(input: SeedanceGenerateInput) {
   return body
 }
 
+function getProviderVideoUrl(data: any) {
+  return data?.content?.video_url || data?.video_url || data?.result?.video_url || data?.output?.video_url || ''
+}
+
+function parseHistoryParameters(value: unknown) {
+  if (!value || typeof value !== 'string') return {}
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}
+  } catch {
+    return {}
+  }
+}
+
+function getHistoryByProviderTaskId(taskId: string) {
+  const rows = db
+    .prepare(`SELECT * FROM generation_history WHERE type = 'video' ORDER BY created_at DESC`)
+    .all() as any[]
+  return rows.find((row) => parseHistoryParameters(row.parameters).providerTaskId === taskId)
+}
+
+function mergeHistoryParameters(row: any, patch: Record<string, unknown>) {
+  const parameters = {
+    ...parseHistoryParameters(row?.parameters),
+    ...patch,
+  }
+  db.prepare(`UPDATE generation_history SET parameters = ? WHERE id = ?`).run(JSON.stringify(parameters), row.id)
+  return parameters
+}
+
+function getExistingLocalVideoUrl(row: any) {
+  if (!row?.result_image_id) return ''
+  const image = db.prepare(`SELECT filename FROM images WHERE id = ?`).get(row.result_image_id) as { filename?: string } | undefined
+  if (!image?.filename) return ''
+  const filePath = path.join(uploadsDir, image.filename)
+  return fs.existsSync(filePath) ? `/uploads/${image.filename}` : ''
+}
+
 // POST /api/video/generate
-router.post('/generate', upload.single('image'), async (req, res) => {
-  const {
-    prompt,
-    duration = '5',
-    resolution = '720p',
-    aspectRatio = '16:9',
-  } = req.body || {}
-
-  if (!prompt) return res.status(400).json({ error: 'Prompt is required' })
-
+router.post('/generate', videoUpload, async (req, res) => {
   const config = resolveConfig(req.body)
   if (!config.apiKey) return res.status(400).json({ error: 'Video API Key is not configured' })
 
   console.log(`[video] POST /generate | model=${config.model} | base=${config.baseUrl}`)
 
   try {
-    const content: any[] = [
-      { type: 'text', text: prompt },
-    ]
-
-    // If image uploaded (I2V), add as image_url content item
-    if (req.file) {
-      const base64 = req.file.buffer.toString('base64')
-      const mime = req.file.mimetype || 'image/png'
-      content.push({
-        type: 'image_url',
-        image_url: { url: `data:${mime};base64,${base64}` },
-      })
+    const providerBaseUrl = assertHttpUrl(String(config.baseUrl), 'Video base URL')
+    const duration = Number(req.body.duration || 5)
+    if (!Number.isFinite(duration) || duration <= 0) {
+      throw new Error('Duration must be a finite number greater than 0')
     }
 
-    const requestBody = {
+    const mode = req.body.mode || 'i2v'
+    if (!isVideoMode(mode)) {
+      throw new Error('Invalid video mode')
+    }
+
+    const media = collectMedia(req.files)
+    if (getTotalMediaBytes(media) > MAX_UPLOAD_BYTES) {
+      throw new Error('Total uploaded media must not exceed 120MB')
+    }
+
+    const input: SeedanceGenerateInput = {
+      mode,
+      prompt: String(req.body.prompt || ''),
+      duration,
+      resolution: String(req.body.resolution || '720p'),
+      aspectRatio: String(req.body.aspectRatio || '16:9'),
+      seed: asOptionalNumber(req.body.seed),
+      watermark: asBoolean(req.body.watermark, false),
+      generateAudio: asBoolean(req.body.generateAudio, false),
+      callbackUrl: String(req.body.callbackUrl || ''),
       model: config.model,
-      content,
-      resolution,
-      ratio: aspectRatio,
-      duration: Number(duration),
+      advanced: parseAdvancedJson(req.body.advancedJson),
+      media,
     }
+
+    const requestBody = buildSeedanceRequestBody(input)
     console.log(`[video] Request metadata:`, {
-      model: requestBody.model,
-      resolution: requestBody.resolution,
-      ratio: requestBody.ratio,
-      duration: requestBody.duration,
-      contentCount: content.length,
-      hasImage: Boolean(req.file),
+      model: input.model,
+      mode: input.mode,
+      resolution: input.resolution,
+      ratio: input.aspectRatio,
+      duration: input.duration,
+      mediaCount: input.media.length,
     })
 
-    const apiRes = await fetch(`${config.baseUrl.replace(/\/+$/, '')}/contents/generations/tasks`, {
+    const providerRes = await fetch(`${providerBaseUrl}/contents/generations/tasks`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -190,41 +260,74 @@ router.post('/generate', upload.single('image'), async (req, res) => {
       body: JSON.stringify(requestBody),
     })
 
-    if (!apiRes.ok) {
-      const err = await apiRes.text()
-      console.error(`[video] API error: ${apiRes.status} ${err}`)
-      throw new Error(`API error: ${apiRes.status} ${err}`)
+    if (!providerRes.ok) {
+      const err = await providerRes.text()
+      console.error(`[video] API error: ${providerRes.status} ${err}`)
+      return res.status(providerRes.status).json({ error: `API error: ${providerRes.status} ${err}` })
     }
 
-    const data = await apiRes.json()
+    const data = await providerRes.json()
     const taskId = data.id || data.task_id
+    if (!taskId) return res.status(502).json({ error: 'Provider did not return a task ID' })
+
     console.log(`[video] Task submitted: ${taskId}`)
 
-    // Save to history
-    const paramsJson = JSON.stringify({ duration, resolution, aspectRatio, model: config.model, type: req.file ? 'i2v' : 't2v' })
+    const paramsJson = JSON.stringify({
+      mode: input.mode,
+      duration: input.duration,
+      resolution: input.resolution,
+      aspectRatio: input.aspectRatio,
+      seed: input.seed,
+      watermark: input.watermark,
+      generateAudio: input.generateAudio,
+      callbackUrl: input.callbackUrl,
+      model: config.model,
+      providerTaskId: taskId,
+    })
     db.prepare(
       `INSERT INTO generation_history (type, prompt, parameters, status)
        VALUES ('video', ?, ?, 'processing')`
-    ).run(prompt, paramsJson)
+    ).run(input.prompt, paramsJson)
 
     res.json({
       taskId,
-      status: 'submitted',
+      status: data.status || 'submitted',
     })
   } catch (err: any) {
     console.error('[video] Generate failed:', err.message)
-    res.status(500).json({ error: err.message })
+    res.status(400).json({ error: err.message })
   }
 })
 
 // GET /api/video/status/:taskId
 router.get('/status/:taskId', async (req, res) => {
   const { taskId } = req.params
-  const videoBaseUrl = req.query.videoBaseUrl as string || ENV_BASE_URL
-  const videoApiKey = req.query.videoApiKey as string || ENV_API_KEY
+  const videoBaseUrl = String(req.header('x-video-base-url') || ENV_BASE_URL)
+  const videoApiKey = String(req.header('x-video-api-key') || ENV_API_KEY)
+  if (!videoApiKey) return res.status(400).json({ error: 'Video API Key is not configured' })
 
   try {
-    const statusRes = await fetch(`${videoBaseUrl.replace(/\/+$/, '')}/contents/generations/tasks/${taskId}`, {
+    const providerBaseUrl = assertHttpUrl(videoBaseUrl, 'Video base URL')
+    const historyRow = getHistoryByProviderTaskId(taskId)
+    const historyParameters = parseHistoryParameters(historyRow?.parameters)
+    const existingLocalVideoUrl = getExistingLocalVideoUrl(historyRow)
+    if (historyRow?.status === 'done' && existingLocalVideoUrl) {
+      return res.json({
+        status: 'succeeded',
+        videoUrl: existingLocalVideoUrl,
+        imageId: historyRow.result_image_id,
+      })
+    }
+    if (historyRow?.status === 'done' && typeof historyParameters.remoteVideoUrl === 'string') {
+      return res.json({
+        status: 'succeeded',
+        videoUrl: historyParameters.remoteVideoUrl,
+        remote: true,
+        warning: typeof historyParameters.warning === 'string' ? historyParameters.warning : undefined,
+      })
+    }
+
+    const statusRes = await fetch(`${providerBaseUrl}/contents/generations/tasks/${taskId}`, {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${videoApiKey}`,
@@ -240,36 +343,54 @@ router.get('/status/:taskId', async (req, res) => {
     console.log(`[video] Task ${taskId} status: ${data.status}`)
 
     // If completed, download and save video
-    if (data.status === 'succeeded' && (data.content?.video_url || data.video_url)) {
-      const videoUrl = data.content?.video_url || data.video_url
-      const vidRes = await fetch(videoUrl)
-      const buffer = Buffer.from(await vidRes.arrayBuffer())
-      const filename = `${uuid()}.mp4`
-      const filePath = path.join(uploadsDir, filename)
-      fs.writeFileSync(filePath, buffer)
+    const videoUrl = getProviderVideoUrl(data)
+    if (data.status === 'succeeded' && videoUrl) {
+      assertHttpUrl(videoUrl, 'Provider video URL')
+      try {
+        const vidRes = await fetch(videoUrl)
+        if (!vidRes.ok) throw new Error(`Video download failed: ${vidRes.status}`)
+        const buffer = Buffer.from(await vidRes.arrayBuffer())
+        const filename = `${uuid()}.mp4`
+        const filePath = path.join(uploadsDir, filename)
+        fs.writeFileSync(filePath, buffer)
 
-      // Save to images table (reuse for video)
-      const imgResult = db
-        .prepare(
-          `INSERT INTO images (filename, original_name, width, height, size, mime_type, is_generated, prompt)
-           VALUES (?, ?, 0, 0, ?, 'video/mp4', 1, ?)`
-        )
-        .run(filename, `video-${filename}`, buffer.length, '')
+        // Save to images table (reuse for video)
+        const imgResult = db
+          .prepare(
+            `INSERT INTO images (filename, original_name, width, height, size, mime_type, is_generated, prompt)
+             VALUES (?, ?, 0, 0, ?, 'video/mp4', 1, ?)`
+          )
+          .run(filename, `video-${filename}`, buffer.length, historyRow?.prompt || '')
 
-      // Update history
-      db.prepare(
-        `UPDATE generation_history SET status = 'done', result_image_id = ? WHERE type = 'video' AND status = 'processing' ORDER BY created_at DESC LIMIT 1`
-      ).run(imgResult.lastInsertRowid)
+        if (historyRow) {
+          db.prepare(`UPDATE generation_history SET status = 'done', result_image_id = ? WHERE id = ?`)
+            .run(imgResult.lastInsertRowid, historyRow.id)
+        }
 
-      res.json({
-        status: 'succeeded',
-        videoUrl: `/uploads/${filename}`,
-        imageId: imgResult.lastInsertRowid,
-      })
+        res.json({
+          status: 'succeeded',
+          videoUrl: `/uploads/${filename}`,
+          imageId: imgResult.lastInsertRowid,
+        })
+      } catch (downloadErr: any) {
+        if (historyRow) {
+          mergeHistoryParameters(historyRow, {
+            remoteVideoUrl: videoUrl,
+            warning: downloadErr.message,
+          })
+          db.prepare(`UPDATE generation_history SET status = 'done' WHERE id = ?`).run(historyRow.id)
+        }
+        return res.json({
+          status: 'succeeded',
+          videoUrl,
+          remote: true,
+          warning: downloadErr.message,
+        })
+      }
     } else if (data.status === 'failed') {
-      db.prepare(
-        `UPDATE generation_history SET status = 'error' WHERE type = 'video' AND status = 'processing' ORDER BY created_at DESC LIMIT 1`
-      ).run()
+      if (historyRow) {
+        db.prepare(`UPDATE generation_history SET status = 'error' WHERE id = ?`).run(historyRow.id)
+      }
       res.json({ status: 'failed', error: data.error || 'Generation failed' })
     } else {
       res.json({ status: data.status || 'running' })

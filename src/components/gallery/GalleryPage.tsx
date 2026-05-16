@@ -69,7 +69,7 @@ export function GalleryPage() {
           exit={{ height: 0, opacity: 0 }}
           className="px-6 pt-4"
         >
-          <DragDropZone onDrop={handleUpload} className="p-2" />
+          <DragDropZone onDrop={handleUpload} accept="image/*,video/mp4,video/webm,video/quicktime,.mp4,.m4v,.mov,.webm" className="p-2" />
         </motion.div>
       )}
 

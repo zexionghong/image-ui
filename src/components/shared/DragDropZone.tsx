@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react'
 import { Upload } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { acceptsFileType } from '@/lib/media'
 import { useTranslations } from '@/i18n/compat/client'
 
 interface DragDropZoneProps {
@@ -19,13 +20,14 @@ export function DragDropZone({ onDrop, accept = 'image/*', multiple = true, clas
   const handleDragLeave = useCallback((e: React.DragEvent) => { e.preventDefault(); setIsDragging(false) }, [])
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault(); setIsDragging(false)
-    const files = Array.from(e.dataTransfer.files).filter((f) => accept === 'image/*' ? f.type.startsWith('image/') : true)
+    const files = Array.from(e.dataTransfer.files).filter((file) => acceptsFileType(file, accept))
     if (files.length) onDrop(files)
   }, [accept, onDrop])
   const handleFileInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || [])
+    const files = Array.from(e.target.files || []).filter((file) => acceptsFileType(file, accept))
     if (files.length) onDrop(files)
-  }, [onDrop])
+    e.target.value = ''
+  }, [accept, onDrop])
 
   return (
     <div

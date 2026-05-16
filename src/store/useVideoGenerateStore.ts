@@ -3,29 +3,88 @@ import type { GenerationHistory } from '@/types'
 import { useApiConfigStore } from './useApiConfigStore'
 
 const API_BASE = '/api'
+const POLL_INTERVAL_MS = 3000
+const GENERATION_TIMEOUT_MS = 600000
+
+type VideoMode = 't2v' | 'i2v' | 'first_last' | 'multimodal' | 'continue'
+
+let activeGenerationId = 0
+let activeHistoryRequestId = 0
+let activePollTimer: ReturnType<typeof setTimeout> | null = null
+let activeTimeout: ReturnType<typeof setTimeout> | null = null
+
+function clearActiveTimers() {
+  if (activePollTimer) {
+    clearTimeout(activePollTimer)
+    activePollTimer = null
+  }
+  if (activeTimeout) {
+    clearTimeout(activeTimeout)
+    activeTimeout = null
+  }
+}
+
+function startNewGeneration() {
+  clearActiveTimers()
+  activeGenerationId += 1
+  return activeGenerationId
+}
+
+function isCurrentGeneration(generationId: number) {
+  return generationId === activeGenerationId
+}
+
+function invalidateActiveGeneration() {
+  activeGenerationId += 1
+  activeHistoryRequestId += 1
+}
 
 interface VideoGenerateStore {
   prompt: string
-  mode: 't2v' | 'i2v'
+  mode: VideoMode
   imageFile: File | null
   imagePreview: string | null
+  endFrameFile: File | null
+  endFramePreview: string | null
+  referenceImages: File[]
+  referenceImagePreviews: string[]
+  referenceVideo: File | null
+  referenceAudio: File | null
   duration: string
   resolution: string
   aspectRatio: string
+  seed: string
+  watermark: boolean
+  generateAudio: boolean
+  callbackUrl: string
+  advancedJson: string
   generating: boolean
   progress: number
   taskId: string | null
+  status: string | null
+  error: string | null
+  remoteResult: boolean
   result: string | null
   history: GenerationHistory[]
 
   setPrompt: (prompt: string) => void
-  setMode: (mode: 't2v' | 'i2v') => void
+  setMode: (mode: VideoMode) => void
   setImageFile: (file: File | null) => void
+  setEndFrameFile: (file: File | null) => void
+  setReferenceImages: (files: File[]) => void
+  setReferenceVideo: (file: File | null) => void
+  setReferenceAudio: (file: File | null) => void
   setDuration: (d: string) => void
   setResolution: (r: string) => void
   setAspectRatio: (r: string) => void
+  setSeed: (seed: string) => void
+  setWatermark: (enabled: boolean) => void
+  setGenerateAudio: (enabled: boolean) => void
+  setCallbackUrl: (url: string) => void
+  setAdvancedJson: (json: string) => void
   generate: () => Promise<void>
-  fetchHistory: () => Promise<void>
+  fetchHistory: (generationId?: number) => Promise<void>
+  dispose: () => void
   reset: () => void
 }
 
@@ -34,12 +93,26 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
   mode: 't2v',
   imageFile: null,
   imagePreview: null,
+  endFrameFile: null,
+  endFramePreview: null,
+  referenceImages: [],
+  referenceImagePreviews: [],
+  referenceVideo: null,
+  referenceAudio: null,
   duration: '5',
   resolution: '720p',
   aspectRatio: '16:9',
+  seed: '',
+  watermark: false,
+  generateAudio: false,
+  callbackUrl: '',
+  advancedJson: '',
   generating: false,
   progress: 0,
   taskId: null,
+  status: null,
+  error: null,
+  remoteResult: false,
   result: null,
   history: [],
 
@@ -53,26 +126,93 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
       imagePreview: file ? URL.createObjectURL(file) : null,
     })
   },
+  setEndFrameFile: (file) => {
+    const old = get().endFramePreview
+    if (old) URL.revokeObjectURL(old)
+    set({
+      endFrameFile: file,
+      endFramePreview: file ? URL.createObjectURL(file) : null,
+    })
+  },
+  setReferenceImages: (files) => {
+    const oldPreviews = get().referenceImagePreviews
+    oldPreviews.forEach((preview) => URL.revokeObjectURL(preview))
+    set({
+      referenceImages: files,
+      referenceImagePreviews: files.map((file) => URL.createObjectURL(file)),
+    })
+  },
+  setReferenceVideo: (file) => set({ referenceVideo: file }),
+  setReferenceAudio: (file) => set({ referenceAudio: file }),
   setDuration: (duration) => set({ duration }),
   setResolution: (resolution) => set({ resolution }),
   setAspectRatio: (aspectRatio) => set({ aspectRatio }),
+  setSeed: (seed) => set({ seed }),
+  setWatermark: (watermark) => set({ watermark }),
+  setGenerateAudio: (generateAudio) => set({ generateAudio }),
+  setCallbackUrl: (callbackUrl) => set({ callbackUrl }),
+  setAdvancedJson: (advancedJson) => set({ advancedJson }),
 
   generate: async () => {
-    const { prompt, mode, imageFile, duration, resolution, aspectRatio } = get()
+    const generationId = startNewGeneration()
+
+    const {
+      prompt,
+      mode,
+      imageFile,
+      endFrameFile,
+      referenceImages,
+      referenceVideo,
+      referenceAudio,
+      duration,
+      resolution,
+      aspectRatio,
+      seed,
+      watermark,
+      generateAudio,
+      callbackUrl,
+      advancedJson,
+    } = get()
     const { videoBaseUrl, videoApiKey, videoModel } = useApiConfigStore.getState()
-    set({ generating: true, progress: 0, result: null, taskId: null })
+    set({
+      generating: true,
+      progress: 0,
+      result: null,
+      taskId: null,
+      status: null,
+      error: null,
+      remoteResult: false,
+    })
 
     try {
       const formData = new FormData()
       formData.append('prompt', prompt)
+      formData.append('mode', mode)
       formData.append('duration', duration)
       formData.append('resolution', resolution)
       formData.append('aspectRatio', aspectRatio)
+      formData.append('seed', seed)
+      formData.append('watermark', String(watermark))
+      formData.append('generateAudio', String(generateAudio))
+      formData.append('callbackUrl', callbackUrl)
+      formData.append('advancedJson', advancedJson)
       formData.append('videoBaseUrl', videoBaseUrl)
       formData.append('videoApiKey', videoApiKey)
       formData.append('videoModel', videoModel)
-      if (mode === 'i2v' && imageFile) {
-        formData.append('image', imageFile)
+      if ((mode === 'i2v' || mode === 'first_last') && imageFile) {
+        formData.append('sourceImage', imageFile)
+      }
+      if (mode === 'first_last' && endFrameFile) {
+        formData.append('endFrame', endFrameFile)
+      }
+      for (const file of referenceImages) {
+        formData.append('referenceImages', file)
+      }
+      if (referenceVideo) {
+        formData.append('referenceVideo', referenceVideo)
+      }
+      if (referenceAudio) {
+        formData.append('referenceAudio', referenceAudio)
       }
 
       const submitRes = await fetch(`${API_BASE}/video/generate`, {
@@ -80,72 +220,156 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
         body: formData,
       })
       const submitData = await submitRes.json()
+      if (!isCurrentGeneration(generationId)) return
+      if (!submitRes.ok) {
+        throw new Error(submitData.error || `Video generation request failed (${submitRes.status})`)
+      }
       if (submitData.error) throw new Error(submitData.error)
+      if (!submitData.taskId) throw new Error('Provider did not return a task ID')
 
       set({ taskId: submitData.taskId })
 
-      // Poll for status
-      const pollInterval = setInterval(async () => {
+      const poll = async () => {
+        if (!isCurrentGeneration(generationId)) return
         try {
-          const statusRes = await fetch(
-            `${API_BASE}/video/status/${submitData.taskId}?videoBaseUrl=${encodeURIComponent(videoBaseUrl)}&videoApiKey=${encodeURIComponent(videoApiKey)}`
-          )
+          const statusRes = await fetch(`${API_BASE}/video/status/${submitData.taskId}`, {
+            headers: {
+              'x-video-base-url': videoBaseUrl,
+              'x-video-api-key': videoApiKey,
+            },
+          })
           const statusData = await statusRes.json()
+          if (!isCurrentGeneration(generationId)) return
+          if (!statusRes.ok) {
+            throw new Error(statusData.error || `Video generation status request failed (${statusRes.status})`)
+          }
 
           if (statusData.status === 'succeeded') {
-            clearInterval(pollInterval)
-            set({ progress: 100, result: statusData.videoUrl, generating: false })
-            get().fetchHistory()
+            clearActiveTimers()
+            set({
+              progress: 100,
+              result: statusData.videoUrl,
+              generating: false,
+              status: 'succeeded',
+              remoteResult: Boolean(statusData.remote),
+              error: null,
+            })
+            void get().fetchHistory(generationId)
           } else if (statusData.status === 'failed') {
-            clearInterval(pollInterval)
-            set({ generating: false })
+            clearActiveTimers()
+            set({
+              generating: false,
+              status: 'failed',
+              error: statusData.error || 'Video generation failed',
+            })
           } else {
-            set((s) => ({ progress: Math.min(s.progress + 5, 95) }))
+            set((s) => ({
+              progress: Math.min(s.progress + 5, 95),
+              status: statusData.status || 'running',
+            }))
+            if (isCurrentGeneration(generationId)) {
+              activePollTimer = setTimeout(() => {
+                void poll()
+              }, POLL_INTERVAL_MS)
+            }
           }
-        } catch {
-          // continue polling
+        } catch (err) {
+          if (!isCurrentGeneration(generationId)) return
+          clearActiveTimers()
+          set({
+            generating: false,
+            status: 'failed',
+            error: err instanceof Error ? err.message : 'Video generation failed',
+          })
         }
-      }, 3000)
+      }
+
+      activePollTimer = setTimeout(() => {
+        void poll()
+      }, POLL_INTERVAL_MS)
 
       // Timeout after 10 minutes
-      setTimeout(() => {
-        clearInterval(pollInterval)
+      activeTimeout = setTimeout(() => {
+        if (!isCurrentGeneration(generationId)) return
+        clearActiveTimers()
+        invalidateActiveGeneration()
         set((s) => {
-          if (s.generating) return { generating: false }
+          if (s.generating) {
+            return {
+              generating: false,
+              status: 'timeout',
+              error: 'Video generation timed out',
+            }
+          }
           return {}
         })
-      }, 600000)
+      }, GENERATION_TIMEOUT_MS)
     } catch (err) {
+      if (!isCurrentGeneration(generationId)) return
       console.error('Video generation failed:', err)
-      set({ generating: false })
+      clearActiveTimers()
+      set({
+        generating: false,
+        status: 'failed',
+        error: err instanceof Error ? err.message : 'Video generation failed',
+      })
     }
   },
 
-  fetchHistory: async () => {
+  fetchHistory: async (generationId) => {
     try {
+      const requestId = ++activeHistoryRequestId
       const res = await fetch(`${API_BASE}/video/history`)
+      if (!res.ok) throw new Error(`Failed to load video history (${res.status})`)
       const data = await res.json()
+      if (requestId !== activeHistoryRequestId) return
+      if (generationId !== undefined && !isCurrentGeneration(generationId)) return
+      if (!Array.isArray(data)) throw new Error('Video history response was not an array')
       set({ history: data })
     } catch (err) {
       console.error('Failed to fetch video history:', err)
     }
   },
 
+  dispose: () => {
+    get().reset()
+  },
+
   reset: () => {
+    clearActiveTimers()
+    invalidateActiveGeneration()
     const old = get().imagePreview
     if (old) URL.revokeObjectURL(old)
+    const oldEndFrame = get().endFramePreview
+    if (oldEndFrame) URL.revokeObjectURL(oldEndFrame)
+    get().referenceImagePreviews.forEach((preview) => URL.revokeObjectURL(preview))
     set({
       prompt: '',
       mode: 't2v',
       imageFile: null,
       imagePreview: null,
+      endFrameFile: null,
+      endFramePreview: null,
+      referenceImages: [],
+      referenceImagePreviews: [],
+      referenceVideo: null,
+      referenceAudio: null,
       duration: '5',
       resolution: '720p',
       aspectRatio: '16:9',
+      seed: '',
+      watermark: false,
+      generateAudio: false,
+      callbackUrl: '',
+      advancedJson: '',
       generating: false,
       progress: 0,
       taskId: null,
+      status: null,
+      error: null,
+      remoteResult: false,
       result: null,
+      history: [],
     })
   },
 }))

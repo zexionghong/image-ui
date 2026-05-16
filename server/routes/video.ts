@@ -282,6 +282,8 @@ router.post('/generate', videoUpload, async (req, res) => {
       generateAudio: input.generateAudio,
       callbackUrl: input.callbackUrl,
       model: config.model,
+      videoBaseUrl: providerBaseUrl,
+      videoApiKey: config.apiKey,
       providerTaskId: taskId,
     })
     db.prepare(
@@ -302,14 +304,14 @@ router.post('/generate', videoUpload, async (req, res) => {
 // GET /api/video/status/:taskId
 router.get('/status/:taskId', async (req, res) => {
   const { taskId } = req.params
-  const videoBaseUrl = String(req.header('x-video-base-url') || ENV_BASE_URL)
-  const videoApiKey = String(req.header('x-video-api-key') || ENV_API_KEY)
-  if (!videoApiKey) return res.status(400).json({ error: 'Video API Key is not configured' })
-
   try {
-    const providerBaseUrl = assertHttpUrl(videoBaseUrl, 'Video base URL')
     const historyRow = getHistoryByProviderTaskId(taskId)
     const historyParameters = parseHistoryParameters(historyRow?.parameters)
+    const videoBaseUrl = String(req.header('x-video-base-url') || historyParameters.videoBaseUrl || ENV_BASE_URL)
+    const videoApiKey = String(req.header('x-video-api-key') || historyParameters.videoApiKey || ENV_API_KEY)
+    if (!videoApiKey) return res.status(400).json({ error: 'Video API Key is not configured' })
+
+    const providerBaseUrl = assertHttpUrl(videoBaseUrl, 'Video base URL')
     const existingLocalVideoUrl = getExistingLocalVideoUrl(historyRow)
     if (historyRow?.status === 'done' && existingLocalVideoUrl) {
       return res.json({

@@ -263,7 +263,11 @@ router.post('/generate', videoUpload, async (req, res) => {
     if (!providerRes.ok) {
       const err = await providerRes.text()
       console.error(`[video] API error: ${providerRes.status} ${err}`)
-      return res.status(providerRes.status).json({ error: `API error: ${providerRes.status} ${err}` })
+      return res.status(providerRes.status).json({
+        error: `API error: ${providerRes.status} ${err}`,
+        providerStatus: providerRes.status,
+        providerMessage: err,
+      })
     }
 
     const data = await providerRes.json()
@@ -338,11 +342,16 @@ router.get('/status/:taskId', async (req, res) => {
 
     if (!statusRes.ok) {
       const err = await statusRes.text()
-      throw new Error(`Status API error: ${statusRes.status} ${err}`)
+      return res.status(statusRes.status).json({
+        error: `Status API error: ${statusRes.status} ${err}`,
+        providerStatus: statusRes.status,
+        providerMessage: err,
+      })
     }
 
     const data = await statusRes.json()
     console.log(`[video] Task ${taskId} status: ${data.status}`)
+    console.log(`[video] Task ${taskId} data: ${JSON.stringify(data)}`)
 
     // If completed, download and save video
     const videoUrl = getProviderVideoUrl(data)
@@ -393,7 +402,14 @@ router.get('/status/:taskId', async (req, res) => {
       if (historyRow) {
         db.prepare(`UPDATE generation_history SET status = 'error' WHERE id = ?`).run(historyRow.id)
       }
-      res.json({ status: 'failed', error: data.error || 'Generation failed' })
+      const providerMessage = typeof data.error === 'string' ? data.error : data.message || 'Generation failed'
+      res.json({
+        status: 'failed',
+        error: 'Generation failed',
+        providerStatus: data.code || data.status || 'failed',
+        providerMessage,
+        serverMessage: 'Generation failed',
+      })
     } else {
       res.json({ status: data.status || 'running' })
     }

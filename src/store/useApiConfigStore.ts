@@ -26,7 +26,7 @@ export const useApiConfigStore = create<ApiConfigStore>()(
       model: 'gpt-image-2',
       videoBaseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
       videoApiKey: '',
-      videoModel: 'seedance-2.0',
+      videoModel: 'doubao-seedance-2-0-260128',
 
       setBaseUrl: (baseUrl) => set({ baseUrl }),
       setApiKey: (apiKey) => set({ apiKey }),

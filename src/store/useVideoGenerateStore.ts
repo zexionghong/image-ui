@@ -60,9 +60,15 @@ interface VideoGenerateStore {
   advancedJson: string
   generating: boolean
   progress: number
+  startedAt: number | null
   taskId: string | null
   status: string | null
   error: string | null
+  errorDetails: {
+    providerCode?: string | number
+    providerMessage?: string
+    serverMessage?: string
+  } | null
   remoteResult: boolean
   result: string | null
   history: GenerationHistory[]
@@ -109,9 +115,11 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
   advancedJson: '',
   generating: false,
   progress: 0,
+  startedAt: null,
   taskId: null,
   status: null,
   error: null,
+  errorDetails: null,
   remoteResult: false,
   result: null,
   history: [],
@@ -177,10 +185,12 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
     set({
       generating: true,
       progress: 0,
+      startedAt: Date.now(),
       result: null,
       taskId: null,
       status: null,
       error: null,
+      errorDetails: null,
       remoteResult: false,
     })
 
@@ -222,7 +232,11 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
       const submitData = await submitRes.json()
       if (!isCurrentGeneration(generationId)) return
       if (!submitRes.ok) {
-        throw new Error(submitData.error || `Video generation request failed (${submitRes.status})`)
+        throw Object.assign(new Error(submitData.error || `Video generation request failed (${submitRes.status})`), {
+          providerCode: submitData.providerStatus ?? submitRes.status,
+          providerMessage: submitData.providerMessage ?? submitData.error ?? '',
+          serverMessage: submitData.error || `Video generation request failed (${submitRes.status})`,
+        })
       }
       if (submitData.error) throw new Error(submitData.error)
       if (!submitData.taskId) throw new Error('Provider did not return a task ID')
@@ -241,7 +255,14 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
           const statusData = await statusRes.json()
           if (!isCurrentGeneration(generationId)) return
           if (!statusRes.ok) {
-            throw new Error(statusData.error || `Video generation status request failed (${statusRes.status})`)
+            throw Object.assign(
+              new Error(statusData.error || `Video generation status request failed (${statusRes.status})`),
+              {
+                providerCode: statusData.providerStatus ?? statusRes.status,
+                providerMessage: statusData.providerMessage ?? statusData.error ?? '',
+                serverMessage: statusData.error || `Video generation status request failed (${statusRes.status})`,
+              }
+            )
           }
 
           if (statusData.status === 'succeeded') {
@@ -253,6 +274,7 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
               status: 'succeeded',
               remoteResult: Boolean(statusData.remote),
               error: null,
+              errorDetails: null,
             })
             void get().fetchHistory(generationId)
           } else if (statusData.status === 'failed') {
@@ -261,6 +283,11 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
               generating: false,
               status: 'failed',
               error: statusData.error || 'Video generation failed',
+              errorDetails: {
+                providerCode: statusData.providerStatus ?? statusData.code ?? 'failed',
+                providerMessage: statusData.providerMessage ?? statusData.error ?? 'Video generation failed',
+                serverMessage: statusData.error || 'Video generation failed',
+              },
             })
           } else {
             set((s) => ({
@@ -276,10 +303,20 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
         } catch (err) {
           if (!isCurrentGeneration(generationId)) return
           clearActiveTimers()
+          const error = err as Error & {
+            providerCode?: string | number
+            providerMessage?: string
+            serverMessage?: string
+          }
           set({
             generating: false,
             status: 'failed',
-            error: err instanceof Error ? err.message : 'Video generation failed',
+            error: error.serverMessage || error.message || 'Video generation failed',
+            errorDetails: {
+              providerCode: error.providerCode,
+              providerMessage: error.providerMessage || error.message || 'Video generation failed',
+              serverMessage: error.serverMessage || error.message || 'Video generation failed',
+            },
           })
         }
       }
@@ -308,10 +345,20 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
       if (!isCurrentGeneration(generationId)) return
       console.error('Video generation failed:', err)
       clearActiveTimers()
+      const error = err as Error & {
+        providerCode?: string | number
+        providerMessage?: string
+        serverMessage?: string
+      }
       set({
         generating: false,
         status: 'failed',
-        error: err instanceof Error ? err.message : 'Video generation failed',
+        error: error.serverMessage || error.message || 'Video generation failed',
+        errorDetails: {
+          providerCode: error.providerCode,
+          providerMessage: error.providerMessage || error.message || 'Video generation failed',
+          serverMessage: error.serverMessage || error.message || 'Video generation failed',
+        },
       })
     }
   },
@@ -336,9 +383,10 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
   },
 
   reset: () => {
-    clearActiveTimers()
-    invalidateActiveGeneration()
-    const old = get().imagePreview
+      clearActiveTimers()
+      invalidateActiveGeneration()
+      set({ errorDetails: null, startedAt: null })
+      const old = get().imagePreview
     if (old) URL.revokeObjectURL(old)
     const oldEndFrame = get().endFramePreview
     if (oldEndFrame) URL.revokeObjectURL(oldEndFrame)
@@ -364,9 +412,11 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
       advancedJson: '',
       generating: false,
       progress: 0,
+      startedAt: null,
       taskId: null,
       status: null,
       error: null,
+      errorDetails: null,
       remoteResult: false,
       result: null,
       history: [],

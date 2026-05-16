@@ -21,6 +21,7 @@ interface WorkflowStore {
   selectedNodeId: string | null
   executing: boolean
   executionResults: Record<string, unknown>
+  nodeStatuses: Record<string, 'idle' | 'running' | 'done' | 'error'>
 
   onNodesChange: OnNodesChange
   onEdgesChange: OnEdgesChange
@@ -32,6 +33,9 @@ interface WorkflowStore {
   setSelectedNodeId: (id: string | null) => void
   setExecuting: (v: boolean) => void
   setExecutionResults: (results: Record<string, unknown>) => void
+  setNodeResult: (nodeId: string, result: unknown) => void
+  setNodeStatus: (nodeId: string, status: 'idle' | 'running' | 'done' | 'error') => void
+  setAllNodeStatus: (status: 'idle' | 'running' | 'done' | 'error') => void
   clearWorkflow: () => void
 }
 
@@ -39,7 +43,7 @@ const NODE_DEFAULTS: Record<string, { label: string; [key: string]: unknown }> =
   textPrompt: { label: '文本提示词', prompt: '' },
   imageInput: { label: '图片输入', imageUrl: '' },
   imageGenerate: { label: '图片生成', model: 'gpt-image-2', size: '1024x1024', quality: 'auto' },
-  videoGenerate: { label: '视频生成', model: 'seedance-2.0', duration: '5', resolution: '720p', aspectRatio: '16:9' },
+  videoGenerate: { label: '视频生成', model: 'doubao-seedance-2-0-260128', duration: '5', resolution: '720p', aspectRatio: '16:9' },
   parameter: { label: '参数配置', paramName: 'quality', paramValue: 'high' },
   output: { label: '输出预览', resultUrl: '' },
 }
@@ -52,6 +56,7 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   selectedNodeId: null,
   executing: false,
   executionResults: {},
+  nodeStatuses: {},
 
   onNodesChange: (changes) => {
     set({ nodes: applyNodeChanges(changes, get().nodes) as Node<NodeData>[] })
@@ -92,7 +97,27 @@ export const useWorkflowStore = create<WorkflowStore>((set, get) => ({
   setExecuting: (v) => set({ executing: v }),
   setExecutionResults: (results) => set({ executionResults: results }),
 
+  setNodeResult: (nodeId, result) => {
+    set({
+      nodes: get().nodes.map((n) =>
+        n.id === nodeId ? { ...n, data: { ...n.data, result } } : n
+      ),
+    })
+  },
+
+  setNodeStatus: (nodeId, status) => {
+    set({ nodeStatuses: { ...get().nodeStatuses, [nodeId]: status } })
+  },
+
+  setAllNodeStatus: (status) => {
+    const statuses: Record<string, 'idle' | 'running' | 'done' | 'error'> = {}
+    for (const n of get().nodes) {
+      statuses[n.id] = status
+    }
+    set({ nodeStatuses: statuses })
+  },
+
   clearWorkflow: () => {
-    set({ nodes: [], edges: [], selectedNodeId: null, executionResults: {} })
+    set({ nodes: [], edges: [], selectedNodeId: null, executionResults: {}, nodeStatuses: {} })
   },
 }))

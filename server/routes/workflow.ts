@@ -181,32 +181,37 @@ async function executeNode(node: WfNode, inputs: unknown[], config: WfConfig): P
 
       const base = (config.videoBaseUrl || '').replace(/\/+$/, '')
       const apiKey = config.videoApiKey
-      const model = (node.data.model as string) || config.videoModel || 'seedance-2.0'
+      const model = (node.data.model as string) || config.videoModel || 'doubao-seedance-2-0-260128'
 
-      const content: Record<string, unknown> = {
-        type: 'video_generation',
-        prompt,
-        duration: Number(node.data.duration) || 5,
-        resolution: node.data.resolution || '720p',
-        aspect_ratio: node.data.aspectRatio || '16:9',
-      }
+      const content: any[] = [
+        { type: 'text', text: prompt },
+      ]
 
       if (imageUrl) {
         // Download image and convert to data URL
         const imgResp = await fetch(imageUrl)
         const imgBuffer = Buffer.from(await imgResp.arrayBuffer())
-        content.image_url = `data:image/png;base64,${imgBuffer.toString('base64')}`
+        content.push({
+          type: 'image_url',
+          image_url: { url: `data:image/png;base64,${imgBuffer.toString('base64')}` },
+        })
       }
 
       // Submit task
       const submitRes = await fetch(`${base}/contents/generations/tasks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({ model, content }),
+        body: JSON.stringify({
+          model,
+          content,
+          resolution: node.data.resolution || '720p',
+          ratio: node.data.aspectRatio || '16:9',
+          duration: Number(node.data.duration) || 5,
+        }),
       })
       if (!submitRes.ok) throw new Error(`Video API error: ${submitRes.status} ${await submitRes.text()}`)
       const submitData = await submitRes.json()
-      const taskId = submitData.id || submitData.task_id
+      const taskId = submitData.id
 
       // Poll until complete (max 10 minutes)
       for (let i = 0; i < 200; i++) {
@@ -215,8 +220,10 @@ async function executeNode(node: WfNode, inputs: unknown[], config: WfConfig): P
           headers: { Authorization: `Bearer ${apiKey}` },
         })
         const statusData = await statusRes.json()
+        console.log('[video] Task status:', 111111)
+        console.log('[video] Task data:', statusData)
         if (statusData.status === 'succeeded') {
-          const videoUrl = statusData.content?.video_url || statusData.video_url
+          const videoUrl = statusData.content?.video_url
           const vidResp = await fetch(videoUrl)
           const vidBuffer = Buffer.from(await vidResp.arrayBuffer())
           const filename = `${uuid()}.mp4`

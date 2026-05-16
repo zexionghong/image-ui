@@ -16,7 +16,7 @@ const ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
 
 export function WorkflowPage() {
   const t = useTranslations('workflow')
-  const { nodes, edges, onNodesChange, onEdgesChange, onConnect, addNode, selectedNodeId, executing, setExecuting, setExecutionResults, clearWorkflow } = useWorkflowStore()
+  const { nodes, edges, onNodesChange, onEdgesChange, onConnect, addNode, selectedNodeId, executing, setExecuting, setNodeResult, setAllNodeStatus, clearWorkflow } = useWorkflowStore()
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const rfInstance = useRef<any>(null)
 
@@ -57,6 +57,7 @@ export function WorkflowPage() {
     }
 
     setExecuting(true)
+    setAllNodeStatus('running')
     try {
       const res = await fetch('/api/workflow/execute', {
         method: 'POST',
@@ -76,9 +77,16 @@ export function WorkflowPage() {
       })
       const data = await res.json()
       if (data.error) throw new Error(data.error)
-      setExecutionResults(data.results || {})
+
+      // Write results back to each node
+      const results = data.results || {}
+      for (const [nodeId, result] of Object.entries(results)) {
+        setNodeResult(nodeId, result)
+        useWorkflowStore.getState().setNodeStatus(nodeId, 'done')
+      }
       toast.success(t('executionComplete'))
     } catch (err: any) {
+      setAllNodeStatus('error')
       toast.error(err.message || t('executionFailed'))
     } finally {
       setExecuting(false)

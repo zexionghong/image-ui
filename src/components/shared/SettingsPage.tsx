@@ -167,6 +167,19 @@ export function SettingsPage() {
               placeholder={t('videoModelPlaceholder')}
               className="font-mono text-sm"
             />
+            <div className="flex flex-wrap gap-2 pt-1">
+              <Button type="button" variant="outline" size="sm" onClick={() => setLocalVideoModel('doubao-seedance-2-0-260128')}>
+                Seedance 2
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setLocalVideoModel('doubao-seedance-2-0-fast-260128')}
+              >
+                Seedance 2 Fast
+              </Button>
+            </div>
           </div>
 
           <div className="flex justify-end pt-2">

@@ -83,14 +83,18 @@ export function PropertyPanel() {
             <Input value={data.model as string} onChange={(e) => update('model', e.target.value)} className="h-8 text-xs" />
           </div>
           <div className="space-y-1.5">
-            <Label className="text-xs">时长</Label>
-            <Select value={data.duration as string} onValueChange={(v) => update('duration', v)}>
-              <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="5">5s</SelectItem>
-                <SelectItem value="10">10s</SelectItem>
-              </SelectContent>
-            </Select>
+            <Label className="text-xs">时长 (4-15秒)</Label>
+            <Input
+              type="number"
+              min={4}
+              max={15}
+              value={data.duration as string}
+              onChange={(e) => {
+                const v = Math.max(4, Math.min(15, Number(e.target.value) || 4))
+                update('duration', String(v))
+              }}
+              className="h-8 text-xs"
+            />
           </div>
           <div className="space-y-1.5">
             <Label className="text-xs">分辨率</Label>

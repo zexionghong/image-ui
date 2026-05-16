@@ -127,17 +127,30 @@ function getTotalMediaBytes(media: UploadedMedia[]) {
 function buildSeedanceRequestBody(input: SeedanceGenerateInput) {
   if (!input.prompt.trim()) throw new Error('Prompt is required')
 
-  const sourceImages = input.media.filter((file) => file.fieldname === 'sourceImage')
-  const endFrames = input.media.filter((file) => file.fieldname === 'endFrame')
-  const referenceImages = input.media.filter((file) => file.fieldname === 'referenceImages')
-  const referenceVideos = input.media.filter((file) => file.fieldname === 'referenceVideo')
-  const referenceAudios = input.media.filter((file) => file.fieldname === 'referenceAudio')
+  const sourceImages = input.mode === 'i2v' || input.mode === 'first_last'
+    ? input.media.filter((file) => file.fieldname === 'sourceImage')
+    : []
+  const endFrames = input.mode === 'first_last'
+    ? input.media.filter((file) => file.fieldname === 'endFrame')
+    : []
+  const referenceImages = input.mode === 'multimodal'
+    ? input.media.filter((file) => file.fieldname === 'referenceImages')
+    : []
+  const referenceVideos = input.mode === 'multimodal' || input.mode === 'continue'
+    ? input.media.filter((file) => file.fieldname === 'referenceVideo')
+    : []
+  const referenceAudios = input.mode === 'multimodal'
+    ? input.media.filter((file) => file.fieldname === 'referenceAudio')
+    : []
 
   if (input.mode === 'i2v' && sourceImages.length === 0) {
     throw new Error('Source image is required for image-to-video')
   }
   if (input.mode === 'first_last' && (sourceImages.length === 0 || endFrames.length === 0)) {
     throw new Error('Source image and end frame are required for first/last-frame video')
+  }
+  if (input.mode === 'continue' && referenceVideos.length === 0) {
+    throw new Error('Reference video is required for video continuation')
   }
 
   const content: any[] = [{ type: 'text', text: input.prompt }]

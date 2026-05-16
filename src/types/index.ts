@@ -19,13 +19,13 @@ export interface ImageData {
 
 export interface GenerationHistory {
   id: number
-  type: 'text2img' | 'img2img' | 'ai_edit'
+  type: 'text2img' | 'img2img' | 'ai_edit' | 'video'
   prompt: string
   negative_prompt: string | null
   style: string | null
   reference_image_id: number | null
   result_image_id: number | null
-  parameters: Record<string, unknown>
+  parameters: string | Record<string, unknown> | null
   status: 'pending' | 'processing' | 'done' | 'error'
   created_at: string
 }

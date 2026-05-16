@@ -216,6 +216,7 @@
     "referenceVideo": "Reference Video",
     "referenceVideoLabel": "Reference Video",
     "referenceVideoHint": "Use a reference clip for motion guidance",
+    "uploadReferenceVideo": "Please upload a reference video first",
     "referenceAudio": "Reference Audio",
     "referenceAudioLabel": "Reference Audio",
     "referenceAudioHint": "Attach audio guidance for the output",

@@ -216,6 +216,7 @@
     "referenceVideo": "参考视频",
     "referenceVideoLabel": "参考视频",
     "referenceVideoHint": "为镜头运动提供视频参考",
+    "uploadReferenceVideo": "请先上传参考视频",
     "referenceAudio": "参考音频",
     "referenceAudioLabel": "参考音频",
     "referenceAudioHint": "为结果附加音频参考",

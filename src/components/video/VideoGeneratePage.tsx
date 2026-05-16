@@ -32,9 +32,8 @@ import { DragDropZone } from '@/components/shared/DragDropZone'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
+import { hasVideoModeInput, type VideoMode } from '@/lib/videoModeConfig'
 import { toast } from 'sonner'
-
-type VideoMode = 't2v' | 'i2v' | 'first_last' | 'multimodal' | 'continue'
 
 const MODES: Array<{ value: VideoMode; labelKey: string; icon: typeof Video }> = [
   { value: 't2v', labelKey: 'textToVideo', icon: Video },
@@ -70,6 +69,11 @@ function parseParameters(value: unknown) {
   } catch {
     return {}
   }
+}
+
+function formatHistoryParam(value: unknown) {
+  if (value === undefined || value === null || value === '') return '—'
+  return String(value)
 }
 
 function isMode(value: unknown): value is VideoMode {
@@ -259,6 +263,10 @@ export function VideoGeneratePage() {
       toast.error(t('uploadEndFrame'))
       return
     }
+    if (mode === 'continue' && !referenceVideo) {
+      toast.error(t('uploadReferenceVideo'))
+      return
+    }
     if (advancedJson.trim()) {
       try {
         JSON.parse(advancedJson)
@@ -286,7 +294,7 @@ export function VideoGeneratePage() {
     }
   }
 
-  const refreshTaskStatus = async (item: { id: number; result_image_id: number | null; status: string; parameters: string | null }) => {
+  const refreshTaskStatus = async (item: { id: number; result_image_id: number | null; status: string; parameters: unknown }) => {
     const params = parseParameters(item.parameters)
     const providerTaskId = typeof params.providerTaskId === 'string' ? params.providerTaskId : ''
     if (!providerTaskId) {
@@ -352,7 +360,7 @@ export function VideoGeneratePage() {
     anchor.click()
   }
 
-  const openHistoryResult = async (item: { result_image_id: number | null; status: string; parameters: string | null }, params: Record<string, unknown>) => {
+  const openHistoryResult = async (item: { result_image_id: number | null; status: string; parameters: unknown }, params: Record<string, unknown>) => {
     try {
       const remoteVideoUrl = typeof params.remoteVideoUrl === 'string' ? params.remoteVideoUrl : ''
       if (remoteVideoUrl) {
@@ -373,7 +381,7 @@ export function VideoGeneratePage() {
     }
   }
 
-  const applyHistoryPreset = (item: { prompt: string; parameters: string | null }) => {
+  const applyHistoryPreset = (item: { prompt: string; parameters: unknown }) => {
     const params = parseParameters(item.parameters)
 
     setPrompt(item.prompt || '')
@@ -395,9 +403,11 @@ export function VideoGeneratePage() {
     toast.success(t('historyLoaded'))
   }
 
-  const canShowSourceImage = mode === 'i2v' || mode === 'first_last'
-  const canShowEndFrame = mode === 'first_last'
-  const canShowReferenceMedia = mode === 'multimodal' || mode === 'continue' || mode === 'i2v' || mode === 'first_last' || mode === 't2v'
+  const canShowSourceImage = hasVideoModeInput(mode, 'sourceImage')
+  const canShowEndFrame = hasVideoModeInput(mode, 'endFrame')
+  const canShowReferenceImages = hasVideoModeInput(mode, 'referenceImages')
+  const canShowReferenceVideo = hasVideoModeInput(mode, 'referenceVideo')
+  const canShowReferenceAudio = hasVideoModeInput(mode, 'referenceAudio')
   const elapsedLabel = startedAt ? formatElapsed(now - startedAt) : '00:00'
   const normalizedStatus = formatStatus(status)
   const pollingLabel = generating
@@ -488,68 +498,74 @@ export function VideoGeneratePage() {
               />
             ) : null}
 
-            <section className="space-y-3 rounded-lg border border-border/60 bg-card/30 p-4">
-              <div>
-                <Label className="text-sm font-medium">{t('referenceImages')}</Label>
-                <p className="text-xs text-muted-foreground">{t('referenceImagesHint')}</p>
-              </div>
-              {referenceImagePreviews.length > 0 ? (
-                <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-2">
-                    {referenceImagePreviews.map((preview, index) => (
-                        <div key={`${preview}-${index}`} className="relative overflow-hidden rounded-lg border border-border">
-                        <img src={preview} alt={`${t('referenceImages')} ${index + 1}`} className="h-28 w-full object-cover" />
-                        <Button
-                          variant="destructive"
-                          size="icon-sm"
-                          className="absolute right-2 top-2"
-                          onClick={() => setReferenceImages(referenceImages.filter((_, i) => i !== index))}
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                  <Button variant="outline" size="sm" onClick={() => setReferenceImages([])}>
-                    <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-                    {tc('reset')}
-                  </Button>
+            {canShowReferenceImages ? (
+              <section className="space-y-3 rounded-lg border border-border/60 bg-card/30 p-4">
+                <div>
+                  <Label className="text-sm font-medium">{t('referenceImages')}</Label>
+                  <p className="text-xs text-muted-foreground">{t('referenceImagesHint')}</p>
                 </div>
-              ) : (
-                <DragDropZone onDrop={(files) => setReferenceImages(files.slice(0, 6))} accept="image/*" multiple className="rounded-lg">
-                  <div className="flex min-h-[140px] flex-col items-center justify-center gap-2 px-4 py-6 text-center">
-                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
-                      <ImageIcon className="h-5 w-5" />
+                {referenceImagePreviews.length > 0 ? (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-2">
+                      {referenceImagePreviews.map((preview, index) => (
+                        <div key={`${preview}-${index}`} className="relative overflow-hidden rounded-lg border border-border">
+                          <img src={preview} alt={`${t('referenceImages')} ${index + 1}`} className="h-28 w-full object-cover" />
+                          <Button
+                            variant="destructive"
+                            size="icon-sm"
+                            className="absolute right-2 top-2"
+                            onClick={() => setReferenceImages(referenceImages.filter((_, i) => i !== index))}
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      ))}
                     </div>
-                    <p className="text-sm font-medium">{t('referenceImages')}</p>
-                    <p className="max-w-[240px] text-xs text-muted-foreground">{t('uploadReferenceImagesHint')}</p>
+                    <Button variant="outline" size="sm" onClick={() => setReferenceImages([])}>
+                      <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                      {tc('reset')}
+                    </Button>
                   </div>
-                </DragDropZone>
-              )}
-            </section>
+                ) : (
+                  <DragDropZone onDrop={(files) => setReferenceImages(files.slice(0, 6))} accept="image/*" multiple className="rounded-lg">
+                    <div className="flex min-h-[140px] flex-col items-center justify-center gap-2 px-4 py-6 text-center">
+                      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                        <ImageIcon className="h-5 w-5" />
+                      </div>
+                      <p className="text-sm font-medium">{t('referenceImages')}</p>
+                      <p className="max-w-[240px] text-xs text-muted-foreground">{t('uploadReferenceImagesHint')}</p>
+                    </div>
+                  </DragDropZone>
+                )}
+              </section>
+            ) : null}
 
-            {canShowReferenceMedia ? (
+            {canShowReferenceVideo || canShowReferenceAudio ? (
               <div className="space-y-4">
-              <FileBlock
-                label={t('referenceVideo')}
-                hint={t('referenceVideoHint')}
-                icon={Video}
-                  selectedName={referenceVideo?.name}
-                  onPick={(files) => setReferenceVideo(files[0] ?? null)}
-                  onClear={() => setReferenceVideo(null)}
-                  accept="video/*"
-                  multiple={false}
-                />
-              <FileBlock
-                label={t('referenceAudio')}
-                hint={t('referenceAudioHint')}
-                icon={AudioLines}
-                  selectedName={referenceAudio?.name}
-                  onPick={(files) => setReferenceAudio(files[0] ?? null)}
-                  onClear={() => setReferenceAudio(null)}
-                  accept="audio/*"
-                  multiple={false}
-                />
+                {canShowReferenceVideo ? (
+                  <FileBlock
+                    label={t('referenceVideo')}
+                    hint={t('referenceVideoHint')}
+                    icon={Video}
+                    selectedName={referenceVideo?.name}
+                    onPick={(files) => setReferenceVideo(files[0] ?? null)}
+                    onClear={() => setReferenceVideo(null)}
+                    accept="video/*"
+                    multiple={false}
+                  />
+                ) : null}
+                {canShowReferenceAudio ? (
+                  <FileBlock
+                    label={t('referenceAudio')}
+                    hint={t('referenceAudioHint')}
+                    icon={AudioLines}
+                    selectedName={referenceAudio?.name}
+                    onPick={(files) => setReferenceAudio(files[0] ?? null)}
+                    onClear={() => setReferenceAudio(null)}
+                    accept="audio/*"
+                    multiple={false}
+                  />
+                ) : null}
               </div>
             ) : null}
 
@@ -911,10 +927,10 @@ export function VideoGeneratePage() {
                             </div>
                             <p className="line-clamp-2 text-sm text-foreground">{item.prompt}</p>
                             <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
-                              <span>{params.duration ? `${params.duration}s` : '—'}</span>
-                              <span>{params.resolution || '—'}</span>
-                              <span>{params.aspectRatio || '—'}</span>
-                              <span>{params.model || '—'}</span>
+                              <span>{params.duration ? `${String(params.duration)}s` : '—'}</span>
+                              <span>{formatHistoryParam(params.resolution)}</span>
+                              <span>{formatHistoryParam(params.aspectRatio)}</span>
+                              <span>{formatHistoryParam(params.model)}</span>
                             </div>
                             {createdAt ? <div className="text-[11px] text-muted-foreground">{createdAt}</div> : null}
                           </div>

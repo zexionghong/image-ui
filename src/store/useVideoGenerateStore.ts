@@ -1,12 +1,11 @@
 import { create } from 'zustand'
 import type { GenerationHistory } from '@/types'
 import { useApiConfigStore } from './useApiConfigStore'
+import { filterMediaForMode, hasVideoModeInput, type VideoMode } from '@/lib/videoModeConfig'
 
 const API_BASE = '/api'
 const POLL_INTERVAL_MS = 3000
 const GENERATION_TIMEOUT_MS = 600000
-
-type VideoMode = 't2v' | 'i2v' | 'first_last' | 'multimodal' | 'continue'
 
 let activeGenerationId = 0
 let activeHistoryRequestId = 0
@@ -125,7 +124,30 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
   history: [],
 
   setPrompt: (prompt) => set({ prompt }),
-  setMode: (mode) => set({ mode }),
+  setMode: (mode) => {
+    const state = get()
+    const patch: Partial<VideoGenerateStore> = { mode }
+
+    if (!hasVideoModeInput(mode, 'sourceImage')) {
+      if (state.imagePreview) URL.revokeObjectURL(state.imagePreview)
+      patch.imageFile = null
+      patch.imagePreview = null
+    }
+    if (!hasVideoModeInput(mode, 'endFrame')) {
+      if (state.endFramePreview) URL.revokeObjectURL(state.endFramePreview)
+      patch.endFrameFile = null
+      patch.endFramePreview = null
+    }
+    if (!hasVideoModeInput(mode, 'referenceImages')) {
+      state.referenceImagePreviews.forEach((preview) => URL.revokeObjectURL(preview))
+      patch.referenceImages = []
+      patch.referenceImagePreviews = []
+    }
+    if (!hasVideoModeInput(mode, 'referenceVideo')) patch.referenceVideo = null
+    if (!hasVideoModeInput(mode, 'referenceAudio')) patch.referenceAudio = null
+
+    set(patch)
+  },
   setImageFile: (file) => {
     const old = get().imagePreview
     if (old) URL.revokeObjectURL(old)
@@ -167,11 +189,6 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
     const {
       prompt,
       mode,
-      imageFile,
-      endFrameFile,
-      referenceImages,
-      referenceVideo,
-      referenceAudio,
       duration,
       resolution,
       aspectRatio,
@@ -181,6 +198,13 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
       callbackUrl,
       advancedJson,
     } = get()
+    const media = filterMediaForMode(mode, {
+      imageFile: get().imageFile,
+      endFrameFile: get().endFrameFile,
+      referenceImages: get().referenceImages,
+      referenceVideo: get().referenceVideo,
+      referenceAudio: get().referenceAudio,
+    })
     const { videoBaseUrl, videoApiKey, videoModel } = useApiConfigStore.getState()
     set({
       generating: true,
@@ -209,20 +233,20 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
       formData.append('videoBaseUrl', videoBaseUrl)
       formData.append('videoApiKey', videoApiKey)
       formData.append('videoModel', videoModel)
-      if ((mode === 'i2v' || mode === 'first_last') && imageFile) {
-        formData.append('sourceImage', imageFile)
+      if (media.imageFile) {
+        formData.append('sourceImage', media.imageFile)
       }
-      if (mode === 'first_last' && endFrameFile) {
-        formData.append('endFrame', endFrameFile)
+      if (media.endFrameFile) {
+        formData.append('endFrame', media.endFrameFile)
       }
-      for (const file of referenceImages) {
+      for (const file of media.referenceImages || []) {
         formData.append('referenceImages', file)
       }
-      if (referenceVideo) {
-        formData.append('referenceVideo', referenceVideo)
+      if (media.referenceVideo) {
+        formData.append('referenceVideo', media.referenceVideo)
       }
-      if (referenceAudio) {
-        formData.append('referenceAudio', referenceAudio)
+      if (media.referenceAudio) {
+        formData.append('referenceAudio', media.referenceAudio)
       }
 
       const submitRes = await fetch(`${API_BASE}/video/generate`, {

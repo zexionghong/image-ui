@@ -56,7 +56,8 @@ function ImageInputNode({ id, data }: NodeProps) {
           <p className="text-[10px] text-muted-foreground">点击上传图片</p>
         )}
       </div>
-      <Handle type="source" position={Position.Right} className="!bg-green-500 !w-2 !h-2" />
+      <Handle id="trigger" type="target" position={Position.Left} className="!bg-green-500 !w-2 !h-2" />
+      <Handle id="image" type="source" position={Position.Right} className="!bg-green-500 !w-2 !h-2" />
     </div>
   )
 }

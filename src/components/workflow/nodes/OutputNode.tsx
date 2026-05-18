@@ -37,7 +37,7 @@ function OutputNode({ id, data }: NodeProps) {
           <p className="text-[10px] text-muted-foreground">等待输出...</p>
         )}
       </div>
-      <Handle type="target" position={Position.Left} className="!bg-pink-500 !w-2 !h-2" />
+      <Handle id="input" type="target" position={Position.Left} className="!bg-pink-500 !w-2 !h-2" />
     </div>
   )
 }

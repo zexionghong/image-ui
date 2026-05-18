@@ -1,5 +1,5 @@
-import { useCallback, useRef } from 'react'
-import { ReactFlow, Background, Controls, MiniMap, Panel } from '@xyflow/react'
+import { useCallback, useEffect, useRef } from 'react'
+import { ReactFlow, Background, Controls, MiniMap, Panel, type Edge, type Connection } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { Play, Trash2, Save, Upload, Type, ImagePlus, Wand2, Video, SlidersHorizontal, Eye } from 'lucide-react'
 import { useWorkflowStore } from '@/store/useWorkflowStore'
@@ -8,15 +8,16 @@ import { nodeTypes, NODE_PANEL_ITEMS } from './nodes'
 import { PropertyPanel } from './PropertyPanel'
 import { useTranslations } from '@/i18n/compat/client'
 import { Button } from '@/components/ui/button'
+import { isWorkflowConnectionValid } from '@/lib/workflowConnections'
 import { toast } from 'sonner'
 
 const ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
-  Type, ImagePlus, Wand2, Video, SlidersHorizontal, Eye,
+  Play, Type, ImagePlus, Wand2, Video, SlidersHorizontal, Eye,
 }
 
 export function WorkflowPage() {
   const t = useTranslations('workflow')
-  const { nodes, edges, onNodesChange, onEdgesChange, onConnect, addNode, selectedNodeId, executing, setExecuting, setNodeResult, setAllNodeStatus, clearWorkflow } = useWorkflowStore()
+  const { nodes, edges, onNodesChange, onEdgesChange, onConnect, addNode, selectedNodeId, executing, setExecuting, setNodeResult, setAllNodeStatus, setSelectedNodeId, clearWorkflow } = useWorkflowStore()
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const rfInstance = useRef<any>(null)
 
@@ -24,6 +25,11 @@ export function WorkflowPage() {
     event.preventDefault()
     event.dataTransfer.dropEffect = 'move'
   }, [])
+
+  const isValidConnection = useCallback(
+    (connection: Connection | Edge) => isWorkflowConnectionValid(nodes, connection),
+    [nodes]
+  )
 
   const onDrop = useCallback(
     (event: React.DragEvent) => {
@@ -45,13 +51,14 @@ export function WorkflowPage() {
     event.dataTransfer.effectAllowed = 'move'
   }
 
-  const handleRun = async () => {
+  const handleRun = useCallback(async () => {
+    const workflow = useWorkflowStore.getState()
     const { isVideoConfigured, isConfigured } = useApiConfigStore.getState()
     if (!isConfigured() && !isVideoConfigured()) {
       toast.error(t('apiNotConfigured'))
       return
     }
-    if (nodes.length === 0) {
+    if (workflow.nodes.length === 0) {
       toast.error(t('noNodes'))
       return
     }
@@ -63,8 +70,9 @@ export function WorkflowPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          nodes: nodes.map((n) => ({ id: n.id, type: n.type, data: n.data })),
-          edges: edges.map((e) => ({ source: e.source, target: e.target })),
+          nodes: workflow.nodes.map((n) => ({ id: n.id, type: n.type, data: n.data })),
+          edges: workflow.edges.map((e) => ({ source: e.source, target: e.target, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle })),
+          approvedResults: workflow.approvedResults,
           config: {
             baseUrl: useApiConfigStore.getState().baseUrl,
             apiKey: useApiConfigStore.getState().apiKey,
@@ -80,18 +88,33 @@ export function WorkflowPage() {
 
       // Write results back to each node
       const results = data.results || {}
+      setAllNodeStatus('idle')
       for (const [nodeId, result] of Object.entries(results)) {
         setNodeResult(nodeId, result)
         useWorkflowStore.getState().setNodeStatus(nodeId, 'done')
       }
-      toast.success(t('executionComplete'))
+      if (data.status === 'paused' && data.pausedNodeId) {
+        useWorkflowStore.getState().setNodeStatus(data.pausedNodeId, 'waitingApproval')
+        setSelectedNodeId(data.pausedNodeId)
+        toast.success('图片已生成，请确认后继续')
+      } else {
+        toast.success(t('executionComplete'))
+      }
     } catch (err: any) {
       setAllNodeStatus('error')
       toast.error(err.message || t('executionFailed'))
     } finally {
       setExecuting(false)
     }
-  }
+  }, [setAllNodeStatus, setExecuting, setNodeResult, setSelectedNodeId, t])
+
+  useEffect(() => {
+    const continueWorkflow = () => {
+      void handleRun()
+    }
+    window.addEventListener('workflow:continue', continueWorkflow)
+    return () => window.removeEventListener('workflow:continue', continueWorkflow)
+  }, [handleRun])
 
   const handleSave = () => {
     const flow = { nodes, edges }
@@ -141,9 +164,12 @@ export function WorkflowPage() {
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
+          isValidConnection={isValidConnection}
           onInit={(instance) => { rfInstance.current = instance }}
           onDrop={onDrop}
           onDragOver={onDragOver}
+          onNodeClick={(_, node) => setSelectedNodeId(node.id)}
+          onPaneClick={() => setSelectedNodeId(null)}
           nodeTypes={nodeTypes}
           fitView
           className="bg-muted/20"

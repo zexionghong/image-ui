@@ -14,7 +14,8 @@ function TextPromptNode({ data }: NodeProps) {
           {(data.prompt as string) || '输入提示词...'}
         </p>
       </div>
-      <Handle type="source" position={Position.Right} className="!bg-blue-500 !w-2 !h-2" />
+      <Handle id="trigger" type="target" position={Position.Left} className="!bg-blue-500 !w-2 !h-2" />
+      <Handle id="prompt" type="source" position={Position.Right} className="!bg-blue-500 !w-2 !h-2" />
     </div>
   )
 }

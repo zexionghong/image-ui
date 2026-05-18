@@ -19,7 +19,8 @@ function ParameterNode({ data }: NodeProps) {
           <span>{data.paramValue as string}</span>
         </div>
       </div>
-      <Handle type="source" position={Position.Right} className="!bg-cyan-500 !w-2 !h-2" />
+      <Handle id="trigger" type="target" position={Position.Left} className="!bg-cyan-500 !w-2 !h-2" />
+      <Handle id="param" type="source" position={Position.Right} className="!bg-cyan-500 !w-2 !h-2" />
     </div>
   )
 }

@@ -4,10 +4,10 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
-import { X } from 'lucide-react'
+import { Trash2, X } from 'lucide-react'
 
 export function PropertyPanel() {
-  const { nodes, selectedNodeId, setSelectedNodeId, updateNodeData } = useWorkflowStore()
+  const { nodes, selectedNodeId, setSelectedNodeId, updateNodeData, deleteNode } = useWorkflowStore()
   const node = nodes.find((n) => n.id === selectedNodeId)
 
   if (!node) return null
@@ -19,9 +19,14 @@ export function PropertyPanel() {
     <div className="w-[260px] border-l border-border/50 p-4 space-y-4 overflow-y-auto">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-medium">{data.label as string}</h3>
-        <Button variant="ghost" size="icon-sm" onClick={() => setSelectedNodeId(null)}>
-          <X className="h-3.5 w-3.5" />
-        </Button>
+        <div className="flex gap-1">
+          <Button variant="ghost" size="icon-sm" onClick={() => deleteNode(node.id)}>
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+          <Button variant="ghost" size="icon-sm" onClick={() => setSelectedNodeId(null)}>
+            <X className="h-3.5 w-3.5" />
+          </Button>
+        </div>
       </div>
 
       {/* Label */}

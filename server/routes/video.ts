@@ -1,16 +1,22 @@
-import { Router } from 'express'
+import { Router, type Request } from 'express'
 import multer from 'multer'
 import { v4 as uuid } from 'uuid'
 import path from 'path'
 import fs from 'fs'
 import db from '../db.js'
+import {
+  getS3UploadConfig,
+  isS3UploadConfigured,
+  uploadBufferToS3,
+} from '../s3Upload.js'
 
 type VideoMode = 't2v' | 'i2v' | 'first_last' | 'multimodal' | 'continue'
 
-type UploadedMedia = {
+export type UploadedMedia = {
   fieldname: string
   mimetype: string
   buffer: Buffer
+  publicUrl: string
 }
 
 type SeedanceGenerateInput = {
@@ -82,22 +88,96 @@ function parseAdvancedJson(value: unknown) {
   return parsed as Record<string, unknown>
 }
 
+function getExtension(file: Express.Multer.File) {
+  const ext = path.extname(file.originalname)
+  if (ext) return ext
+  if (file.mimetype === 'image/png') return '.png'
+  if (file.mimetype === 'image/jpeg') return '.jpg'
+  if (file.mimetype === 'image/webp') return '.webp'
+  if (file.mimetype === 'video/mp4') return '.mp4'
+  if (file.mimetype === 'video/quicktime') return '.mov'
+  if (file.mimetype === 'audio/mpeg') return '.mp3'
+  if (file.mimetype === 'audio/wav') return '.wav'
+  return ''
+}
+
+function getRequestBaseUrl(req: Request) {
+  const configured = process.env.PUBLIC_UPLOAD_BASE_URL || process.env.PUBLIC_BASE_URL
+  if (configured) return assertHttpUrl(configured, 'Public upload base URL')
+
+  const forwardedProto = String(req.header('x-forwarded-proto') || '').split(',')[0]?.trim()
+  const proto = forwardedProto || req.protocol
+  return assertHttpUrl(`${proto}://${req.get('host')}`, 'Request base URL')
+}
+
+function getPublicUploadUrl(filename: string, baseUrl: string) {
+  return new URL(`/uploads/${encodeURIComponent(filename)}`, baseUrl).toString()
+}
+
+async function persistUploadedMedia(file: Express.Multer.File, publicBaseUrl: string) {
+  const filename = `${uuid()}${getExtension(file)}`
+
+  if (isS3UploadConfigured()) {
+    const s3Config = getS3UploadConfig()
+    const key = `${s3Config.keyPrefix}/${filename}`
+    const publicUrl = await uploadBufferToS3({
+      key,
+      body: file.buffer,
+      contentType: file.mimetype || 'application/octet-stream',
+      config: s3Config,
+    })
+    console.log(`[video] Uploaded media to S3: bucket=${s3Config.bucket} key=${key} url=${publicUrl}`)
+    return { filename, publicUrl }
+  }
+
+  fs.writeFileSync(path.join(uploadsDir, filename), file.buffer)
+  const publicUrl = getPublicUploadUrl(filename, publicBaseUrl)
+  console.log(`[video] Stored media locally: filename=${filename} url=${publicUrl}`)
+  return { filename, publicUrl }
+}
+
 function fileToContent(file: UploadedMedia, role?: string) {
   return {
     type: 'image_url',
     image_url: {
-      url: `data:${file.mimetype || 'image/png'};base64,${file.buffer.toString('base64')}`,
+      url: file.publicUrl,
     },
     ...(role ? { role } : {}),
   }
 }
 
-function collectMedia(files: Express.Request['files']) {
+function videoToContent(file: UploadedMedia) {
+  return {
+    type: 'video_url',
+    video_url: {
+      url: file.publicUrl,
+    },
+    role: 'reference_video',
+  }
+}
+
+function audioToContent(file: UploadedMedia) {
+  return {
+    type: 'audio_url',
+    audio_url: {
+      url: file.publicUrl,
+    },
+    role: 'reference_audio',
+  }
+}
+
+async function collectMedia(files: Express.Request['files'], publicBaseUrl: string) {
   const grouped = files as Record<string, Express.Multer.File[]> | undefined
   const media: UploadedMedia[] = []
   for (const list of Object.values(grouped || {})) {
     for (const file of list) {
-      media.push({ fieldname: file.fieldname, mimetype: file.mimetype, buffer: file.buffer })
+      const { publicUrl } = await persistUploadedMedia(file, publicBaseUrl)
+      media.push({
+        fieldname: file.fieldname,
+        mimetype: file.mimetype,
+        buffer: file.buffer,
+        publicUrl,
+      })
     }
   }
   return media
@@ -124,7 +204,7 @@ function getTotalMediaBytes(media: UploadedMedia[]) {
   return media.reduce((total, file) => total + file.buffer.length, 0)
 }
 
-function buildSeedanceRequestBody(input: SeedanceGenerateInput) {
+export function buildSeedanceRequestBody(input: SeedanceGenerateInput) {
   if (!input.prompt.trim()) throw new Error('Prompt is required')
 
   const sourceImages = input.mode === 'i2v' || input.mode === 'first_last'
@@ -154,9 +234,11 @@ function buildSeedanceRequestBody(input: SeedanceGenerateInput) {
   }
 
   const content: any[] = [{ type: 'text', text: input.prompt }]
-  for (const file of sourceImages) content.push(fileToContent(file, 'source'))
-  for (const file of endFrames) content.push(fileToContent(file, 'end_frame'))
-  for (const file of referenceImages) content.push(fileToContent(file, 'reference'))
+  for (const file of sourceImages) content.push(fileToContent(file, 'first_frame'))
+  for (const file of endFrames) content.push(fileToContent(file, 'last_frame'))
+  for (const file of referenceImages) content.push(fileToContent(file, 'reference_image'))
+  for (const file of referenceVideos) content.push(videoToContent(file))
+  for (const file of referenceAudios) content.push(audioToContent(file))
 
   const body: Record<string, unknown> = {
     model: input.model,
@@ -171,8 +253,6 @@ function buildSeedanceRequestBody(input: SeedanceGenerateInput) {
   if (input.watermark !== undefined) body.watermark = input.watermark
   if (input.generateAudio !== undefined) body.generate_audio = input.generateAudio
   if (input.callbackUrl) body.callback_url = input.callbackUrl
-  if (referenceVideos.length > 0) body.reference_video = `data:${referenceVideos[0].mimetype};base64,${referenceVideos[0].buffer.toString('base64')}`
-  if (referenceAudios.length > 0) body.reference_audio = `data:${referenceAudios[0].mimetype};base64,${referenceAudios[0].buffer.toString('base64')}`
 
   return body
 }
@@ -234,7 +314,7 @@ router.post('/generate', videoUpload, async (req, res) => {
       throw new Error('Invalid video mode')
     }
 
-    const media = collectMedia(req.files)
+    const media = await collectMedia(req.files, getRequestBaseUrl(req))
     if (getTotalMediaBytes(media) > MAX_UPLOAD_BYTES) {
       throw new Error('Total uploaded media must not exceed 120MB')
     }

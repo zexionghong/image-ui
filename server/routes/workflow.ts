@@ -2,23 +2,23 @@ import { Router } from 'express'
 import { v4 as uuid } from 'uuid'
 import path from 'path'
 import fs from 'fs'
-import db from '../db.js'
+import {
+  collectLegacyInputs,
+  collectSlotInputs,
+  getExecutableNodes,
+  resolveImageInput,
+  resolveParamInputs,
+  resolvePromptInput,
+  shouldPauseForApproval,
+  type WorkflowEdge,
+  type WorkflowNode,
+} from '../workflowEngine.js'
+import { getS3UploadConfig, isS3UploadConfigured, uploadBufferToS3 } from '../s3Upload.js'
 
 const uploadsDir = path.join(process.cwd(), 'public', 'uploads')
 fs.mkdirSync(uploadsDir, { recursive: true })
 
 const router = Router()
-
-interface WfNode {
-  id: string
-  type: string
-  data: Record<string, unknown>
-}
-
-interface WfEdge {
-  source: string
-  target: string
-}
 
 interface WfConfig {
   baseUrl: string
@@ -27,51 +27,15 @@ interface WfConfig {
   videoBaseUrl: string
   videoApiKey: string
   videoModel: string
-}
-
-// Topological sort
-function topoSort(nodes: WfNode[], edges: WfEdge[]): WfNode[] {
-  const adj = new Map<string, string[]>()
-  const inDeg = new Map<string, number>()
-  for (const n of nodes) {
-    adj.set(n.id, [])
-    inDeg.set(n.id, 0)
-  }
-  for (const e of edges) {
-    adj.get(e.source)!.push(e.target)
-    inDeg.set(e.target, (inDeg.get(e.target) || 0) + 1)
-  }
-  const queue: string[] = []
-  for (const [id, deg] of inDeg) {
-    if (deg === 0) queue.push(id)
-  }
-  const sorted: WfNode[] = []
-  const nodeMap = new Map(nodes.map((n) => [n.id, n]))
-  while (queue.length > 0) {
-    const id = queue.shift()!
-    sorted.push(nodeMap.get(id)!)
-    for (const next of adj.get(id) || []) {
-      inDeg.set(next, inDeg.get(next)! - 1)
-      if (inDeg.get(next) === 0) queue.push(next)
-    }
-  }
-  return sorted
-}
-
-// Get input data from upstream nodes
-function getInputs(nodeId: string, edges: WfEdge[], results: Map<string, unknown>): unknown[] {
-  const inputs: unknown[] = []
-  for (const e of edges) {
-    if (e.target === nodeId && results.has(e.source)) {
-      inputs.push(results.get(e.source))
-    }
-  }
-  return inputs
+  publicBaseUrl?: string
 }
 
 // Execute a single node
-async function executeNode(node: WfNode, inputs: unknown[], config: WfConfig): Promise<unknown> {
+async function executeNode(node: WorkflowNode, edges: WorkflowEdge[], results: Map<string, unknown>, config: WfConfig): Promise<unknown> {
   switch (node.type) {
+    case 'start':
+      return { type: 'start' }
+
     case 'textPrompt':
       return { type: 'text', prompt: node.data.prompt || '' }
 
@@ -82,18 +46,16 @@ async function executeNode(node: WfNode, inputs: unknown[], config: WfConfig): P
       return { type: 'param', name: node.data.paramName, value: node.data.paramValue }
 
     case 'imageGenerate': {
-      // Collect prompt from text inputs
-      let prompt = ''
-      let imageUrl = ''
-      for (const inp of inputs) {
-        const input = inp as Record<string, unknown>
-        if (input.type === 'text' && input.prompt) prompt = input.prompt as string
-        if (input.type === 'image' && input.imageUrl) imageUrl = input.imageUrl as string
-        if (input.type === 'param') {
-          // Override specific params
-          if (input.name === 'quality') node.data.quality = input.value
-          if (input.name === 'size') node.data.size = input.value
-        }
+      const legacyInputs = collectLegacyInputs(node.id, edges, results)
+      const promptInputs = collectSlotInputs(node.id, 'prompt', edges, results)
+      const imageInputs = collectSlotInputs(node.id, 'image', edges, results)
+      const prompt = resolvePromptInput([...promptInputs, ...legacyInputs])
+      const imageUrl = resolveImageInput([...imageInputs, ...legacyInputs])
+      const params = resolveParamInputs([...collectSlotInputs(node.id, 'param', edges, results), ...legacyInputs])
+      if (params.quality) node.data.quality = params.quality
+      if (params.size) node.data.size = params.size
+      if (!prompt && hasTextInput(imageInputs)) {
+        throw new Error(`Node ${node.id}: text prompt is connected to image input; reconnect it to the prompt input`)
       }
       if (!prompt) throw new Error(`Node ${node.id}: no prompt input`)
 
@@ -103,8 +65,7 @@ async function executeNode(node: WfNode, inputs: unknown[], config: WfConfig): P
 
       if (imageUrl) {
         // img2img - download image and send as edit
-        const imgResp = await fetch(imageUrl)
-        const imgBuffer = Buffer.from(await imgResp.arrayBuffer())
+        const imgBuffer = await readImageBuffer(imageUrl)
         const form = new FormData()
         form.append('model', model)
         form.append('prompt', prompt)
@@ -169,13 +130,13 @@ async function executeNode(node: WfNode, inputs: unknown[], config: WfConfig): P
     }
 
     case 'videoGenerate': {
-      // Collect prompt and image from inputs
-      let prompt = ''
-      let imageUrl = ''
-      for (const inp of inputs) {
-        const input = inp as Record<string, unknown>
-        if (input.type === 'text' && input.prompt) prompt = input.prompt as string
-        if (input.type === 'image' && input.imageUrl) imageUrl = input.imageUrl as string
+      const legacyInputs = collectLegacyInputs(node.id, edges, results)
+      const promptInputs = collectSlotInputs(node.id, 'prompt', edges, results)
+      const imageInputs = collectSlotInputs(node.id, 'image', edges, results)
+      const prompt = resolvePromptInput([...promptInputs, ...legacyInputs])
+      const imageUrl = resolveImageInput([...imageInputs, ...legacyInputs])
+      if (!prompt && hasTextInput(imageInputs)) {
+        throw new Error(`Node ${node.id}: text prompt is connected to image input; reconnect it to the prompt input`)
       }
       if (!prompt) throw new Error(`Node ${node.id}: no prompt input`)
 
@@ -188,12 +149,10 @@ async function executeNode(node: WfNode, inputs: unknown[], config: WfConfig): P
       ]
 
       if (imageUrl) {
-        // Download image and convert to data URL
-        const imgResp = await fetch(imageUrl)
-        const imgBuffer = Buffer.from(await imgResp.arrayBuffer())
         content.push({
           type: 'image_url',
-          image_url: { url: `data:image/png;base64,${imgBuffer.toString('base64')}` },
+          image_url: { url: await toProviderMediaUrl(imageUrl, config.publicBaseUrl) },
+          role: 'first_frame',
         })
       }
 
@@ -238,36 +197,109 @@ async function executeNode(node: WfNode, inputs: unknown[], config: WfConfig): P
     }
 
     case 'output':
-      // Just pass through input
-      return inputs[0] || { type: 'none' }
+      return collectSlotInputs(node.id, 'input', edges, results)[0] || collectLegacyInputs(node.id, edges, results)[0] || { type: 'none' }
 
     default:
       return { type: 'unknown' }
   }
 }
 
+function hasTextInput(inputs: unknown[]) {
+  return inputs.some((input) => {
+    const value = input as Record<string, unknown>
+    return value.type === 'text' && value.prompt
+  })
+}
+
+async function readImageBuffer(imageUrl: string) {
+  if (imageUrl.startsWith('/uploads/')) {
+    const filename = path.basename(imageUrl)
+    return fs.readFileSync(path.join(uploadsDir, filename))
+  }
+
+  const imgResp = await fetch(imageUrl)
+  if (!imgResp.ok) throw new Error(`Failed to fetch image input: ${imgResp.status}`)
+  return Buffer.from(await imgResp.arrayBuffer())
+}
+
+async function toProviderMediaUrl(mediaUrl: string, publicBaseUrl?: string) {
+  if (mediaUrl.startsWith('/uploads/')) {
+    if (isS3UploadConfigured()) {
+      const filename = path.basename(mediaUrl)
+      const filePath = path.join(uploadsDir, filename)
+      const buffer = fs.readFileSync(filePath)
+      const s3Config = getS3UploadConfig()
+      return uploadBufferToS3({
+        key: `${s3Config.keyPrefix}/${filename}`,
+        body: buffer,
+        contentType: getContentType(filename),
+        config: s3Config,
+      })
+    }
+    if (!publicBaseUrl) throw new Error('Public upload base URL is required for workflow video inputs')
+    return new URL(mediaUrl, publicBaseUrl).toString()
+  }
+
+  const parsed = new URL(mediaUrl)
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('Video input media must be an HTTP-accessible URL')
+  }
+  return parsed.toString()
+}
+
+function getContentType(filename: string) {
+  const ext = path.extname(filename).toLowerCase()
+  if (ext === '.png') return 'image/png'
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg'
+  if (ext === '.webp') return 'image/webp'
+  if (ext === '.mp4') return 'video/mp4'
+  if (ext === '.mov') return 'video/quicktime'
+  return 'application/octet-stream'
+}
+
+function getRequestBaseUrl(req: { protocol: string; get(name: string): string | undefined; header(name: string): string | undefined }) {
+  const configured = process.env.PUBLIC_UPLOAD_BASE_URL || process.env.PUBLIC_BASE_URL
+  if (configured) return new URL(configured).toString()
+
+  const forwardedProto = String(req.header('x-forwarded-proto') || '').split(',')[0]?.trim()
+  const proto = forwardedProto || req.protocol
+  return new URL(`${proto}://${req.get('host')}`).toString()
+}
+
 // POST /api/workflow/execute
 router.post('/execute', async (req, res) => {
-  const { nodes, edges, config } = req.body || {}
+  const { nodes, edges, config, approvedResults } = req.body || {}
   if (!nodes || !edges) return res.status(400).json({ error: 'Missing nodes or edges' })
 
   try {
-    const sorted = topoSort(nodes, edges)
-    const results = new Map<string, unknown>()
+    const sorted = getExecutableNodes(nodes, edges)
+    const workflowConfig = {
+      ...config,
+      publicBaseUrl: getRequestBaseUrl(req),
+    }
+    const approved = (approvedResults || {}) as Record<string, unknown>
+    const results = new Map<string, unknown>(Object.entries(approved))
     const output: Record<string, unknown> = {}
+    for (const [nodeId, result] of results) {
+      output[nodeId] = result
+    }
 
     console.log(`[workflow] Executing ${sorted.length} nodes in order: ${sorted.map((n) => n.id).join(' -> ')}`)
 
     for (const node of sorted) {
-      const inputs = getInputs(node.id, edges, results)
-      console.log(`[workflow] Executing node ${node.id} (${node.type}) with ${inputs.length} inputs`)
-      const result = await executeNode(node, inputs, config)
+      if (results.has(node.id)) continue
+      console.log(`[workflow] Executing node ${node.id} (${node.type})`)
+      const result = await executeNode(node, edges, results, workflowConfig)
       results.set(node.id, result)
       output[node.id] = result
+      if (shouldPauseForApproval(node, edges)) {
+        console.log(`[workflow] Paused for approval at ${node.id}`)
+        return res.json({ status: 'paused', pausedNodeId: node.id, result, results: output })
+      }
     }
 
     console.log(`[workflow] Execution complete`)
-    res.json({ results: output })
+    res.json({ status: 'done', results: output })
   } catch (err: any) {
     console.error('[workflow] Execution failed:', err.message)
     res.status(500).json({ error: err.message })

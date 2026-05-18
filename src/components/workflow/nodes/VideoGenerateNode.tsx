@@ -37,8 +37,9 @@ function VideoGenerateNode({ id, data }: NodeProps) {
           <video src={result.videoUrl} className="w-full h-16 object-cover rounded mt-1" />
         )}
       </div>
-      <Handle type="target" position={Position.Left} className="!bg-orange-500 !w-2 !h-2" />
-      <Handle type="source" position={Position.Right} className="!bg-orange-500 !w-2 !h-2" />
+      <Handle id="prompt" type="target" position={Position.Left} className="!bg-blue-500 !w-2 !h-2" style={{ top: '34%' }} />
+      <Handle id="image" type="target" position={Position.Left} className="!bg-green-500 !w-2 !h-2" style={{ top: '66%' }} />
+      <Handle id="video" type="source" position={Position.Right} className="!bg-orange-500 !w-2 !h-2" />
     </div>
   )
 }

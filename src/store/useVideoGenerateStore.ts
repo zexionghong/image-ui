@@ -79,6 +79,7 @@ interface VideoGenerateStore {
   setReferenceImages: (files: File[]) => void
   setReferenceVideo: (file: File | null) => void
   setReferenceAudio: (file: File | null) => void
+  insertPromptReference: (token: string) => void
   setDuration: (d: string) => void
   setResolution: (r: string) => void
   setAspectRatio: (r: string) => void
@@ -174,6 +175,9 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
   },
   setReferenceVideo: (file) => set({ referenceVideo: file }),
   setReferenceAudio: (file) => set({ referenceAudio: file }),
+  insertPromptReference: (token) => set((state) => ({
+    prompt: state.prompt.trim() ? `${state.prompt.trimEnd()} ${token} ` : `${token} `,
+  })),
   setDuration: (duration) => set({ duration }),
   setResolution: (resolution) => set({ resolution }),
   setAspectRatio: (aspectRatio) => set({ aspectRatio }),

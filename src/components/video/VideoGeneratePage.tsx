@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
   AudioLines,
@@ -216,6 +216,7 @@ export function VideoGeneratePage() {
     setReferenceImages,
     setReferenceVideo,
     setReferenceAudio,
+    insertPromptReference,
     setDuration,
     setResolution,
     setAspectRatio,
@@ -234,6 +235,8 @@ export function VideoGeneratePage() {
   const ts = useTranslations('settings')
   const { isVideoConfigured, videoModel, videoBaseUrl } = useApiConfigStore()
   const [now, setNow] = useState(() => Date.now())
+  const promptRef = useRef<HTMLTextAreaElement | null>(null)
+  const [mentionOpen, setMentionOpen] = useState(false)
 
   useEffect(() => {
     fetchHistory()
@@ -292,6 +295,37 @@ export function VideoGeneratePage() {
     } catch {
       toast.error(tc('copyFailed'))
     }
+  }
+
+  const insertImageMention = (token: string) => {
+    const input = promptRef.current
+    if (!input) {
+      insertPromptReference(token)
+      setMentionOpen(false)
+      return
+    }
+
+    const start = input.selectionStart
+    const end = input.selectionEnd
+    const replaceAt = start > 0 && prompt[start - 1] === '@' ? start - 1 : start
+    const before = prompt.slice(0, replaceAt)
+    const after = prompt.slice(end)
+    const next = `${before}${token} ${after}`
+    setPrompt(next)
+    setMentionOpen(false)
+
+    requestAnimationFrame(() => {
+      input.focus()
+      const nextPosition = before.length + token.length + 1
+      input.setSelectionRange(nextPosition, nextPosition)
+    })
+  }
+
+  const handlePromptChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const nextPrompt = event.target.value
+    const cursor = event.target.selectionStart
+    setPrompt(nextPrompt)
+    setMentionOpen(referenceImagePreviews.length > 0 && nextPrompt[cursor - 1] === '@')
   }
 
   const refreshTaskStatus = async (item: { id: number; result_image_id: number | null; status: string; parameters: unknown }) => {
@@ -511,6 +545,14 @@ export function VideoGeneratePage() {
                         <div key={`${preview}-${index}`} className="relative overflow-hidden rounded-lg border border-border">
                           <img src={preview} alt={`${t('referenceImages')} ${index + 1}`} className="h-28 w-full object-cover" />
                           <Button
+                            variant="secondary"
+                            size="sm"
+                            className="absolute left-2 top-2 h-7 bg-background/85 px-2 font-mono text-xs shadow-sm backdrop-blur"
+                            onClick={() => insertPromptReference(`@img${index + 1}`)}
+                          >
+                            @img{index + 1}
+                          </Button>
+                          <Button
                             variant="destructive"
                             size="icon-sm"
                             className="absolute right-2 top-2"
@@ -525,9 +567,24 @@ export function VideoGeneratePage() {
                       <Trash2 className="mr-1.5 h-3.5 w-3.5" />
                       {tc('reset')}
                     </Button>
+                    {referenceImages.length < 9 ? (
+                      <DragDropZone
+                        onDrop={(files) => setReferenceImages([...referenceImages, ...files].slice(0, 9))}
+                        accept="image/*"
+                        multiple
+                        className="rounded-lg"
+                      >
+                        <div className="flex min-h-[92px] flex-col items-center justify-center gap-2 px-4 py-4 text-center">
+                          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                            <ImageIcon className="h-4 w-4" />
+                          </div>
+                          <p className="text-xs font-medium">{t('uploadReferenceImagesHint')}</p>
+                        </div>
+                      </DragDropZone>
+                    ) : null}
                   </div>
                 ) : (
-                  <DragDropZone onDrop={(files) => setReferenceImages(files.slice(0, 6))} accept="image/*" multiple className="rounded-lg">
+                  <DragDropZone onDrop={(files) => setReferenceImages(files.slice(0, 9))} accept="image/*" multiple className="rounded-lg">
                     <div className="flex min-h-[140px] flex-col items-center justify-center gap-2 px-4 py-6 text-center">
                       <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted text-muted-foreground">
                         <ImageIcon className="h-5 w-5" />
@@ -575,11 +632,57 @@ export function VideoGeneratePage() {
                 <Label className="text-sm font-medium">{t('promptLabel')}</Label>
               </div>
               <Textarea
+                ref={promptRef}
                 value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
+                onChange={handlePromptChange}
+                onBlur={() => window.setTimeout(() => setMentionOpen(false), 120)}
                 placeholder={t('promptPlaceholder')}
                 className="min-h-[140px] resize-none bg-background/60 font-medium"
               />
+              {mentionOpen ? (
+                <div className="z-20 rounded-lg border border-border bg-popover p-2 shadow-lg">
+                  <div className="grid gap-1">
+                    {referenceImagePreviews.map((preview, index) => (
+                      <button
+                        key={`${preview}-mention-${index}`}
+                        type="button"
+                        className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted"
+                        onMouseDown={(event) => {
+                          event.preventDefault()
+                          insertImageMention(`@img${index + 1}`)
+                        }}
+                      >
+                        <img src={preview} alt="" className="h-9 w-9 rounded object-cover" />
+                        <span className="font-mono text-xs">@img{index + 1}</span>
+                        <span className="min-w-0 truncate text-xs text-muted-foreground">
+                          {referenceImages[index]?.name || t('referenceImages')}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {referenceImagePreviews.some((_, index) => prompt.includes(`@img${index + 1}`)) ? (
+                <div className="flex flex-wrap gap-2">
+                  {referenceImagePreviews.map((preview, index) => {
+                    const token = `@img${index + 1}`
+                    if (!prompt.includes(token)) return null
+                    return (
+                      <button
+                        key={`${preview}-chip-${index}`}
+                        type="button"
+                        className="group relative rounded-md border border-border bg-background px-2 py-1 font-mono text-xs text-primary hover:bg-muted"
+                        onClick={() => insertImageMention(token)}
+                      >
+                        {token}
+                        <span className="pointer-events-none absolute bottom-full left-0 z-30 mb-2 hidden w-44 rounded-lg border border-border bg-popover p-1 shadow-xl group-hover:block">
+                          <img src={preview} alt="" className="h-32 w-full rounded object-cover" />
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : null}
               <p className="text-xs text-muted-foreground">{t('promptHint')}</p>
             </section>
 

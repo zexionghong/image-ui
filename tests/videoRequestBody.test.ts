@@ -22,6 +22,20 @@ const referenceVideo: UploadedMedia = {
   publicUrl: 'https://example.com/uploads/reference.mp4',
 }
 
+const referenceImageA: UploadedMedia = {
+  fieldname: 'referenceImages',
+  mimetype: 'image/png',
+  buffer: Buffer.from('reference-image-a'),
+  publicUrl: 'https://example.com/uploads/reference-a.png',
+}
+
+const referenceImageB: UploadedMedia = {
+  fieldname: 'referenceImages',
+  mimetype: 'image/png',
+  buffer: Buffer.from('reference-image-b'),
+  publicUrl: 'https://example.com/uploads/reference-b.png',
+}
+
 const referenceAudio: UploadedMedia = {
   fieldname: 'referenceAudio',
   mimetype: 'audio/mpeg',
@@ -62,10 +76,20 @@ assert.deepEqual(
     resolution: '720p',
     aspectRatio: '16:9',
     model: 'doubao-seedance-2-0-260128',
-    media: [referenceVideo, referenceAudio],
+    media: [referenceImageA, referenceImageB, referenceVideo, referenceAudio],
   }).content,
   [
     { type: 'text', text: 'use the references' },
+    {
+      type: 'image_url',
+      image_url: { url: 'https://example.com/uploads/reference-a.png' },
+      role: 'reference_image',
+    },
+    {
+      type: 'image_url',
+      image_url: { url: 'https://example.com/uploads/reference-b.png' },
+      role: 'reference_image',
+    },
     {
       type: 'video_url',
       video_url: { url: 'https://example.com/uploads/reference.mp4' },

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link, useRouterState } from '@tanstack/react-router'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Images, Wand2, Settings, ChevronLeft, ChevronRight, Sparkles, Video, Workflow } from 'lucide-react'
+import { FolderKanban, Images, Wand2, Settings, ChevronLeft, ChevronRight, Sparkles, Video, Workflow } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
@@ -16,6 +16,7 @@ export function Sidebar() {
   const navItems = [
     { key: 'gallery', name: t('gallery'), href: `/${locale}/gallery`, icon: Images },
     { key: 'generate', name: t('generate'), href: `/${locale}/generate`, icon: Wand2 },
+    { key: 'resources', name: '资源库', href: `/${locale}/resources`, icon: FolderKanban },
     { key: 'videoGenerate', name: t('videoGenerate'), href: `/${locale}/video-generate`, icon: Video },
     { key: 'workflow', name: t('workflow'), href: `/${locale}/workflow`, icon: Workflow },
     { key: 'settings', name: t('settings'), href: `/${locale}/settings`, icon: Settings },

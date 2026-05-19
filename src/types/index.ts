@@ -30,6 +30,26 @@ export interface GenerationHistory {
   created_at: string
 }
 
+export interface ResourceProjectAsset {
+  id: number
+  role: 'front' | 'side' | 'back' | string
+  sort_order: number
+  created_at: string
+  image: ImageData
+}
+
+export interface ResourceProject {
+  id: number
+  name: string
+  description: string
+  subject: string
+  style: string
+  status: 'draft' | 'ready' | 'generating' | string
+  created_at: string
+  updated_at: string
+  assets: ResourceProjectAsset[]
+}
+
 export interface FilterParams {
   brightness: number
   contrast: number

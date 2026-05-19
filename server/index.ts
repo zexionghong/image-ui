@@ -8,6 +8,7 @@ import generateRouter from './routes/generate.js'
 import editRouter from './routes/edit.js'
 import videoRouter from './routes/video.js'
 import workflowRouter from './routes/workflow.js'
+import resourcesRouter from './routes/resources.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -36,6 +37,7 @@ app.use('/api/generate', generateRouter)
 app.use('/api/edit', editRouter)
 app.use('/api/video', videoRouter)
 app.use('/api/workflow', workflowRouter)
+app.use('/api/resources', resourcesRouter)
 
 // Health check
 app.get('/api/health', (_req, res) => {

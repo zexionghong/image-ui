@@ -9,6 +9,13 @@ import {
   isS3UploadConfigured,
   uploadBufferToS3,
 } from '../s3Upload.js'
+import {
+  extractResourcePaths,
+  parseResourcePath,
+  RESOURCE_THREE_VIEW_FOLDER,
+  THREE_VIEW_ANGLE_LABELS,
+  type ThreeViewAngle,
+} from '../../src/lib/resourceLibrary.js'
 
 type VideoMode = 't2v' | 'i2v' | 'first_last' | 'multimodal' | 'continue'
 
@@ -183,6 +190,58 @@ async function collectMedia(files: Express.Request['files'], publicBaseUrl: stri
   return media
 }
 
+function findThreeViewRole(assetName: string) {
+  return (Object.entries(THREE_VIEW_ANGLE_LABELS) as Array<[ThreeViewAngle, string]>)
+    .find(([, label]) => label === assetName)?.[0]
+}
+
+function getResourceProject(projectPath: string) {
+  return db
+    .prepare(`SELECT * FROM resource_projects WHERE name = ? OR REPLACE(TRIM(name), ' ', '-') = ? ORDER BY id DESC LIMIT 1`)
+    .get(projectPath, projectPath) as any
+}
+
+function resolveResourcePathToMedia(resourcePath: string, publicBaseUrl: string): UploadedMedia | null {
+  const parsed = parseResourcePath(resourcePath)
+  if (!parsed || parsed.folder !== RESOURCE_THREE_VIEW_FOLDER) return null
+
+  const role = findThreeViewRole(parsed.assetName)
+  if (!role) return null
+
+  const project = getResourceProject(parsed.projectName)
+  if (!project) return null
+
+  const row = db
+    .prepare(
+      `SELECT i.*
+       FROM resource_project_assets rpa
+       JOIN images i ON i.id = rpa.image_id
+       WHERE rpa.project_id = ? AND rpa.role = ?
+       ORDER BY rpa.id DESC
+       LIMIT 1`
+    )
+    .get(project.id, role) as any
+  if (!row?.filename) return null
+
+  const filePath = path.join(uploadsDir, row.filename)
+  if (!fs.existsSync(filePath)) return null
+
+  return {
+    fieldname: 'referenceImages',
+    mimetype: row.mime_type || 'image/png',
+    buffer: fs.readFileSync(filePath),
+    publicUrl: getPublicUploadUrl(row.filename, publicBaseUrl),
+  }
+}
+
+function collectResourcePromptMedia(prompt: string, publicBaseUrl: string) {
+  const paths = extractResourcePaths(prompt)
+  const media = paths
+    .map((resourcePath) => resolveResourcePathToMedia(resourcePath, publicBaseUrl))
+    .filter((item): item is UploadedMedia => Boolean(item))
+  return media.slice(0, 6)
+}
+
 function isVideoMode(value: unknown): value is VideoMode {
   return typeof value === 'string' && VIDEO_MODES.includes(value as VideoMode)
 }
@@ -314,7 +373,10 @@ router.post('/generate', videoUpload, async (req, res) => {
       throw new Error('Invalid video mode')
     }
 
-    const media = await collectMedia(req.files, getRequestBaseUrl(req))
+    const publicBaseUrl = getRequestBaseUrl(req)
+    const media = await collectMedia(req.files, publicBaseUrl)
+    const resourceMedia = collectResourcePromptMedia(String(req.body.prompt || ''), publicBaseUrl)
+    media.push(...resourceMedia)
     if (getTotalMediaBytes(media) > MAX_UPLOAD_BYTES) {
       throw new Error('Total uploaded media must not exceed 120MB')
     }

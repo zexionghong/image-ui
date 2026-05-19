@@ -88,7 +88,7 @@ async function callImageApi(params: {
     const data = await res.json()
     console.log(`[generate] img2img API response: ${data.data?.length || 0} image(s) returned`)
     const buffers: Buffer[] = []
-    for (const item of data.data) {
+    for (const item of (data.data ?? [])) {
       if (item.b64_json) {
         buffers.push(Buffer.from(item.b64_json, 'base64'))
       } else if (item.url) {
@@ -96,6 +96,7 @@ async function callImageApi(params: {
         buffers.push(Buffer.from(await imgRes.arrayBuffer()))
       }
     }
+    if (buffers.length === 0) throw new Error(`img2img API returned no images: ${JSON.stringify(data)}`)
     return buffers
   }
 
@@ -130,7 +131,7 @@ async function callImageApi(params: {
   const data = await res.json()
   console.log(`[generate] text2img API response: ${data.data?.length || 0} image(s) returned`)
   const buffers: Buffer[] = []
-  for (const item of data.data) {
+  for (const item of (data.data ?? [])) {
     if (item.b64_json) {
       buffers.push(Buffer.from(item.b64_json, 'base64'))
     } else if (item.url) {
@@ -138,6 +139,7 @@ async function callImageApi(params: {
       buffers.push(Buffer.from(await imgRes.arrayBuffer()))
     }
   }
+  if (buffers.length === 0) throw new Error(`text2img API returned no images: ${JSON.stringify(data)}`)
   return buffers
 }
 

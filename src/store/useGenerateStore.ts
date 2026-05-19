@@ -130,6 +130,7 @@ export const useGenerateStore = create<GenerateStore>((set, get) => ({
       const data = await res.json()
 
       clearInterval(progressInterval)
+      if (!res.ok) throw new Error(data.error || `Generation failed (${res.status})`)
       set({ progress: 100, result: data.url })
       get().fetchHistory()
     } catch (err) {
@@ -142,8 +143,9 @@ export const useGenerateStore = create<GenerateStore>((set, get) => ({
   fetchHistory: async () => {
     try {
       const res = await apiFetch(`${API_BASE}/generate/history`)
+      if (!res.ok) throw new Error(`Failed to fetch history: ${res.status}`)
       const data = await res.json()
-      set({ history: data })
+      set({ history: Array.isArray(data) ? data : [] })
     } catch (err) {
       console.error('Failed to fetch history:', err)
     }

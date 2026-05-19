@@ -45,8 +45,9 @@ export const useImageStore = create<ImageStore>((set, get) => ({
       if (p.category) query.set('category', p.category)
 
       const res = await apiFetch(`${API_BASE}/images?${query}`)
+      if (!res.ok) throw new Error(`Failed to fetch images: ${res.status}`)
       const data: PaginatedResponse<ImageData> = await res.json()
-      set({ images: data.data, total: data.total, page: data.page, pageSize: data.pageSize })
+      set({ images: data.data || [], total: data.total || 0, page: data.page || 1, pageSize: data.pageSize || 20 })
     } catch (err) {
       console.error('Failed to fetch images:', err)
     } finally {

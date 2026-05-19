@@ -1,14 +1,8 @@
 import { Router, type Request } from 'express'
 import multer from 'multer'
-import { v4 as uuid } from 'uuid'
 import path from 'path'
-import fs from 'fs'
-import db from '../db.js'
-import {
-  getS3UploadConfig,
-  isS3UploadConfigured,
-  uploadBufferToS3,
-} from '../s3Upload.js'
+import { persistBuffer } from '../mediaStorage.js'
+import { requireAuth, type AuthenticatedRequest } from '../supabaseAuth.js'
 import {
   extractResourcePaths,
   parseResourcePath,
@@ -44,9 +38,6 @@ type SeedanceGenerateInput = {
 const VIDEO_MODES: VideoMode[] = ['t2v', 'i2v', 'first_last', 'multimodal', 'continue']
 const MAX_UPLOAD_BYTES = 120 * 1024 * 1024
 
-const uploadsDir = path.join(process.cwd(), 'public', 'uploads')
-fs.mkdirSync(uploadsDir, { recursive: true })
-
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -63,6 +54,7 @@ const videoUpload = upload.fields([
   { name: 'referenceAudio', maxCount: 1 },
 ])
 const router = Router()
+router.use(requireAuth)
 
 const ENV_API_KEY = process.env.ARK_API_KEY || process.env.OPENAI_API_KEY || ''
 const ENV_BASE_URL = process.env.ARK_BASE_URL || 'https://ark.cn-beijing.volces.com/api/v3'
@@ -121,26 +113,15 @@ function getPublicUploadUrl(filename: string, baseUrl: string) {
   return new URL(`/uploads/${encodeURIComponent(filename)}`, baseUrl).toString()
 }
 
-async function persistUploadedMedia(file: Express.Multer.File, publicBaseUrl: string) {
-  const filename = `${uuid()}${getExtension(file)}`
-
-  if (isS3UploadConfigured()) {
-    const s3Config = getS3UploadConfig()
-    const key = `${s3Config.keyPrefix}/${filename}`
-    const publicUrl = await uploadBufferToS3({
-      key,
-      body: file.buffer,
-      contentType: file.mimetype || 'application/octet-stream',
-      config: s3Config,
-    })
-    console.log(`[video] Uploaded media to S3: bucket=${s3Config.bucket} key=${key} url=${publicUrl}`)
-    return { filename, publicUrl }
-  }
-
-  fs.writeFileSync(path.join(uploadsDir, filename), file.buffer)
-  const publicUrl = getPublicUploadUrl(filename, publicBaseUrl)
-  console.log(`[video] Stored media locally: filename=${filename} url=${publicUrl}`)
-  return { filename, publicUrl }
+async function persistUploadedMedia(file: Express.Multer.File, userId: string) {
+  const stored = await persistBuffer({
+    userId,
+    buffer: file.buffer,
+    contentType: file.mimetype || 'application/octet-stream',
+    originalName: file.originalname || `upload${getExtension(file)}`,
+  })
+  console.log(`[video] Stored media: filename=${stored.filename} url=${stored.url}`)
+  return { filename: stored.filename, publicUrl: stored.url }
 }
 
 function fileToContent(file: UploadedMedia, role?: string) {
@@ -173,12 +154,12 @@ function audioToContent(file: UploadedMedia) {
   }
 }
 
-async function collectMedia(files: Express.Request['files'], publicBaseUrl: string) {
+async function collectMedia(files: Express.Request['files'], userId: string) {
   const grouped = files as Record<string, Express.Multer.File[]> | undefined
   const media: UploadedMedia[] = []
   for (const list of Object.values(grouped || {})) {
     for (const file of list) {
-      const { publicUrl } = await persistUploadedMedia(file, publicBaseUrl)
+      const { publicUrl } = await persistUploadedMedia(file, userId)
       media.push({
         fieldname: file.fieldname,
         mimetype: file.mimetype,
@@ -195,49 +176,53 @@ function findThreeViewRole(assetName: string) {
     .find(([, label]) => label === assetName)?.[0]
 }
 
-function getResourceProject(projectPath: string) {
-  return db
-    .prepare(`SELECT * FROM resource_projects WHERE name = ? OR REPLACE(TRIM(name), ' ', '-') = ? ORDER BY id DESC LIMIT 1`)
-    .get(projectPath, projectPath) as any
+async function getResourceProject(req: AuthenticatedRequest, projectPath: string) {
+  const { data, error } = await req.supabase
+    .from('resource_projects')
+    .select('*')
+    .eq('user_id', req.user.id)
+    .or(`name.eq.${projectPath},name.eq.${projectPath.replace(/-/g, ' ')}`)
+    .order('id', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error) throw error
+  return data
 }
 
-function resolveResourcePathToMedia(resourcePath: string, publicBaseUrl: string): UploadedMedia | null {
+async function resolveResourcePathToMedia(req: AuthenticatedRequest, resourcePath: string): Promise<UploadedMedia | null> {
   const parsed = parseResourcePath(resourcePath)
   if (!parsed || parsed.folder !== RESOURCE_THREE_VIEW_FOLDER) return null
 
   const role = findThreeViewRole(parsed.assetName)
   if (!role) return null
 
-  const project = getResourceProject(parsed.projectName)
+  const project = await getResourceProject(req, parsed.projectName)
   if (!project) return null
 
-  const row = db
-    .prepare(
-      `SELECT i.*
-       FROM resource_project_assets rpa
-       JOIN images i ON i.id = rpa.image_id
-       WHERE rpa.project_id = ? AND rpa.role = ?
-       ORDER BY rpa.id DESC
-       LIMIT 1`
-    )
-    .get(project.id, role) as any
-  if (!row?.filename) return null
-
-  const filePath = path.join(uploadsDir, row.filename)
-  if (!fs.existsSync(filePath)) return null
+  const { data, error } = await req.supabase
+    .from('resource_project_assets')
+    .select('image:images(*)')
+    .eq('user_id', req.user.id)
+    .eq('project_id', project.id)
+    .eq('role', role)
+    .order('id', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error) throw error
+  const row = (data as any)?.image
+  if (!row?.url) return null
 
   return {
     fieldname: 'referenceImages',
     mimetype: row.mime_type || 'image/png',
-    buffer: fs.readFileSync(filePath),
-    publicUrl: getPublicUploadUrl(row.filename, publicBaseUrl),
+    buffer: Buffer.alloc(Number(row.size) || 0),
+    publicUrl: row.url,
   }
 }
 
-function collectResourcePromptMedia(prompt: string, publicBaseUrl: string) {
+async function collectResourcePromptMedia(req: AuthenticatedRequest, prompt: string) {
   const paths = extractResourcePaths(prompt)
-  const media = paths
-    .map((resourcePath) => resolveResourcePathToMedia(resourcePath, publicBaseUrl))
+  const media = (await Promise.all(paths.map((resourcePath) => resolveResourcePathToMedia(req, resourcePath))))
     .filter((item): item is UploadedMedia => Boolean(item))
   return media.slice(0, 6)
 }
@@ -330,32 +315,47 @@ function parseHistoryParameters(value: unknown) {
   }
 }
 
-function getHistoryByProviderTaskId(taskId: string) {
-  const rows = db
-    .prepare(`SELECT * FROM generation_history WHERE type = 'video' ORDER BY created_at DESC`)
-    .all() as any[]
-  return rows.find((row) => parseHistoryParameters(row.parameters).providerTaskId === taskId)
+async function getHistoryByProviderTaskId(req: AuthenticatedRequest, taskId: string) {
+  const { data, error } = await req.supabase
+    .from('generation_history')
+    .select('*')
+    .eq('user_id', req.user.id)
+    .eq('type', 'video')
+    .order('created_at', { ascending: false })
+    .limit(100)
+  if (error) throw error
+  return (data || []).find((row) => parseHistoryParameters(row.parameters).providerTaskId === taskId)
 }
 
-function mergeHistoryParameters(row: any, patch: Record<string, unknown>) {
+async function mergeHistoryParameters(req: AuthenticatedRequest, row: any, patch: Record<string, unknown>) {
   const parameters = {
     ...parseHistoryParameters(row?.parameters),
     ...patch,
   }
-  db.prepare(`UPDATE generation_history SET parameters = ? WHERE id = ?`).run(JSON.stringify(parameters), row.id)
+  const { error } = await req.supabase
+    .from('generation_history')
+    .update({ parameters })
+    .eq('user_id', req.user.id)
+    .eq('id', row.id)
+  if (error) throw error
   return parameters
 }
 
-function getExistingLocalVideoUrl(row: any) {
+async function getExistingVideoUrl(req: AuthenticatedRequest, row: any) {
   if (!row?.result_image_id) return ''
-  const image = db.prepare(`SELECT filename FROM images WHERE id = ?`).get(row.result_image_id) as { filename?: string } | undefined
-  if (!image?.filename) return ''
-  const filePath = path.join(uploadsDir, image.filename)
-  return fs.existsSync(filePath) ? `/uploads/${image.filename}` : ''
+  const { data, error } = await req.supabase
+    .from('images')
+    .select('url')
+    .eq('user_id', req.user.id)
+    .eq('id', row.result_image_id)
+    .maybeSingle()
+  if (error) throw error
+  return data?.url || ''
 }
 
 // POST /api/video/generate
 router.post('/generate', videoUpload, async (req, res) => {
+  const authed = req as AuthenticatedRequest
   const config = resolveConfig(req.body)
   if (!config.apiKey) return res.status(400).json({ error: 'Video API Key is not configured' })
 
@@ -374,8 +374,8 @@ router.post('/generate', videoUpload, async (req, res) => {
     }
 
     const publicBaseUrl = getRequestBaseUrl(req)
-    const media = await collectMedia(req.files, publicBaseUrl)
-    const resourceMedia = collectResourcePromptMedia(String(req.body.prompt || ''), publicBaseUrl)
+    const media = await collectMedia(req.files, authed.user.id)
+    const resourceMedia = await collectResourcePromptMedia(authed, String(req.body.prompt || ''))
     media.push(...resourceMedia)
     if (getTotalMediaBytes(media) > MAX_UPLOAD_BYTES) {
       throw new Error('Total uploaded media must not exceed 120MB')
@@ -445,10 +445,14 @@ router.post('/generate', videoUpload, async (req, res) => {
       videoApiKey: config.apiKey,
       providerTaskId: taskId,
     })
-    db.prepare(
-      `INSERT INTO generation_history (type, prompt, parameters, status)
-       VALUES ('video', ?, ?, 'processing')`
-    ).run(input.prompt, paramsJson)
+    const historyResult = await authed.supabase.from('generation_history').insert({
+      user_id: authed.user.id,
+      type: 'video',
+      prompt: input.prompt,
+      parameters: JSON.parse(paramsJson),
+      status: 'processing',
+    })
+    if (historyResult.error) throw historyResult.error
 
     res.json({
       taskId,
@@ -462,20 +466,21 @@ router.post('/generate', videoUpload, async (req, res) => {
 
 // GET /api/video/status/:taskId
 router.get('/status/:taskId', async (req, res) => {
+  const authed = req as AuthenticatedRequest
   const { taskId } = req.params
   try {
-    const historyRow = getHistoryByProviderTaskId(taskId)
+    const historyRow = await getHistoryByProviderTaskId(authed, taskId)
     const historyParameters = parseHistoryParameters(historyRow?.parameters)
     const videoBaseUrl = String(req.header('x-video-base-url') || historyParameters.videoBaseUrl || ENV_BASE_URL)
     const videoApiKey = String(req.header('x-video-api-key') || historyParameters.videoApiKey || ENV_API_KEY)
     if (!videoApiKey) return res.status(400).json({ error: 'Video API Key is not configured' })
 
     const providerBaseUrl = assertHttpUrl(videoBaseUrl, 'Video base URL')
-    const existingLocalVideoUrl = getExistingLocalVideoUrl(historyRow)
-    if (historyRow?.status === 'done' && existingLocalVideoUrl) {
+    const existingVideoUrl = await getExistingVideoUrl(authed, historyRow)
+    if (historyRow?.status === 'done' && existingVideoUrl) {
       return res.json({
         status: 'succeeded',
-        videoUrl: existingLocalVideoUrl,
+        videoUrl: existingVideoUrl,
         imageId: historyRow.result_image_id,
       })
     }
@@ -516,35 +521,57 @@ router.get('/status/:taskId', async (req, res) => {
         const vidRes = await fetch(videoUrl)
         if (!vidRes.ok) throw new Error(`Video download failed: ${vidRes.status}`)
         const buffer = Buffer.from(await vidRes.arrayBuffer())
-        const filename = `${uuid()}.mp4`
-        const filePath = path.join(uploadsDir, filename)
-        fs.writeFileSync(filePath, buffer)
+        const stored = await persistBuffer({
+          userId: authed.user.id,
+          buffer,
+          contentType: 'video/mp4',
+          originalName: 'generated-video.mp4',
+        })
 
-        // Save to images table (reuse for video)
-        const imgResult = db
-          .prepare(
-            `INSERT INTO images (filename, original_name, width, height, size, mime_type, is_generated, prompt)
-             VALUES (?, ?, 0, 0, ?, 'video/mp4', 1, ?)`
-          )
-          .run(filename, `video-${filename}`, buffer.length, historyRow?.prompt || '')
+        const { data: image, error: imageError } = await authed.supabase
+          .from('images')
+          .insert({
+            user_id: authed.user.id,
+            filename: stored.filename,
+            original_name: `video-${stored.filename}`,
+            url: stored.url,
+            storage_key: stored.storageKey,
+            width: 0,
+            height: 0,
+            size: buffer.length,
+            mime_type: 'video/mp4',
+            is_generated: true,
+            prompt: historyRow?.prompt || '',
+          })
+          .select('*')
+          .single()
+        if (imageError) throw imageError
 
         if (historyRow) {
-          db.prepare(`UPDATE generation_history SET status = 'done', result_image_id = ? WHERE id = ?`)
-            .run(imgResult.lastInsertRowid, historyRow.id)
+          const updateResult = await authed.supabase
+            .from('generation_history')
+            .update({ status: 'done', result_image_id: image.id })
+            .eq('user_id', authed.user.id)
+            .eq('id', historyRow.id)
+          if (updateResult.error) throw updateResult.error
         }
 
         res.json({
           status: 'succeeded',
-          videoUrl: `/uploads/${filename}`,
-          imageId: imgResult.lastInsertRowid,
+          videoUrl: stored.url,
+          imageId: image.id,
         })
       } catch (downloadErr: any) {
         if (historyRow) {
-          mergeHistoryParameters(historyRow, {
+          await mergeHistoryParameters(authed, historyRow, {
             remoteVideoUrl: videoUrl,
             warning: downloadErr.message,
           })
-          db.prepare(`UPDATE generation_history SET status = 'done' WHERE id = ?`).run(historyRow.id)
+          await authed.supabase
+            .from('generation_history')
+            .update({ status: 'done' })
+            .eq('user_id', authed.user.id)
+            .eq('id', historyRow.id)
         }
         return res.json({
           status: 'succeeded',
@@ -555,7 +582,11 @@ router.get('/status/:taskId', async (req, res) => {
       }
     } else if (data.status === 'failed') {
       if (historyRow) {
-        db.prepare(`UPDATE generation_history SET status = 'error' WHERE id = ?`).run(historyRow.id)
+        await authed.supabase
+          .from('generation_history')
+          .update({ status: 'error' })
+          .eq('user_id', authed.user.id)
+          .eq('id', historyRow.id)
       }
       const providerMessage = typeof data.error === 'string' ? data.error : data.message || 'Generation failed'
       res.json({
@@ -575,11 +606,17 @@ router.get('/status/:taskId', async (req, res) => {
 })
 
 // GET /api/video/history
-router.get('/history', (_req, res) => {
-  const rows = db
-    .prepare(`SELECT * FROM generation_history WHERE type = 'video' ORDER BY created_at DESC LIMIT 50`)
-    .all()
-  res.json(rows)
+router.get('/history', async (req, res) => {
+  const authed = req as AuthenticatedRequest
+  const { data, error } = await authed.supabase
+    .from('generation_history')
+    .select('*')
+    .eq('user_id', authed.user.id)
+    .eq('type', 'video')
+    .order('created_at', { ascending: false })
+    .limit(50)
+  if (error) return res.status(500).json({ error: error.message })
+  res.json(data || [])
 })
 
 export default router

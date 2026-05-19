@@ -1,5 +1,5 @@
 export interface ImageData {
-  id: number
+  id: string
   filename: string
   original_name: string
   width: number
@@ -11,27 +11,27 @@ export interface ImageData {
   metadata: Record<string, unknown>
   is_generated: boolean
   prompt: string | null
-  parent_id: number | null
+  parent_id: string | null
   created_at: string
   updated_at: string
   url: string
 }
 
 export interface GenerationHistory {
-  id: number
+  id: string
   type: 'text2img' | 'img2img' | 'ai_edit' | 'video'
   prompt: string
   negative_prompt: string | null
   style: string | null
-  reference_image_id: number | null
-  result_image_id: number | null
+  reference_image_id: string | null
+  result_image_id: string | null
   parameters: string | Record<string, unknown> | null
   status: 'pending' | 'processing' | 'done' | 'error'
   created_at: string
 }
 
 export interface ResourceProjectAsset {
-  id: number
+  id: string
   role: 'front' | 'side' | 'back' | string
   sort_order: number
   created_at: string
@@ -39,7 +39,7 @@ export interface ResourceProjectAsset {
 }
 
 export interface ResourceProject {
-  id: number
+  id: string
   name: string
   description: string
   subject: string

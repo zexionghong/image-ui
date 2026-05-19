@@ -1,15 +1,12 @@
 import { Router } from 'express'
 import multer from 'multer'
-import { v4 as uuid } from 'uuid'
-import path from 'path'
-import fs from 'fs'
-import db from '../db.js'
-
-const uploadsDir = path.join(process.cwd(), 'public', 'uploads')
-fs.mkdirSync(uploadsDir, { recursive: true })
+import { serializeImageRow, type ImageRow } from '../imageRows.js'
+import { persistBuffer } from '../mediaStorage.js'
+import { requireAuth, type AuthenticatedRequest } from '../supabaseAuth.js'
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } })
 const router = Router()
+router.use(requireAuth)
 
 // Env fallbacks
 const ENV_API_KEY = process.env.OPENAI_API_KEY || ''
@@ -155,6 +152,7 @@ function resolveConfig(body: any) {
 
 // POST /api/generate/text2img
 router.post('/text2img', upload.none(), async (req, res) => {
+  const authed = req as AuthenticatedRequest
   const {
     prompt,
     negativePrompt,
@@ -185,32 +183,46 @@ router.post('/text2img', upload.none(), async (req, res) => {
     })
 
     const { width, height } = parseSize(size)
-    const ext = outputFormat === 'jpeg' ? 'jpg' : outputFormat
-    const filename = `${uuid()}.${ext}`
-    const filePath = path.join(uploadsDir, filename)
-    fs.writeFileSync(filePath, buffers[0])
-
-    const imgResult = db
-      .prepare(
-        `INSERT INTO images (filename, original_name, width, height, size, mime_type, is_generated, prompt)
-         VALUES (?, ?, ?, ?, ?, ?, 1, ?)`
-      )
-      .run(filename, `generated-${filename}`, width, height, buffers[0].length, `image/${outputFormat}`, prompt)
-
-    const paramsJson = JSON.stringify({ size, quality, background, outputFormat, outputCompression, n, model: config.model })
-    db.prepare(
-      `INSERT INTO generation_history (type, prompt, negative_prompt, style, result_image_id, parameters, status)
-       VALUES ('text2img', ?, ?, ?, ?, ?, 'done')`
-    ).run(prompt, negativePrompt || null, null, imgResult.lastInsertRowid, paramsJson)
-
-    const row = db.prepare('SELECT * FROM images WHERE id = ?').get(imgResult.lastInsertRowid) as any
-    console.log(`[generate] text2img done | saved=${filename} | size=${buffers[0].length} bytes | id=${row.id}`)
-    res.json({
-      ...row,
-      tags: JSON.parse(row.tags || '[]'),
-      metadata: JSON.parse(row.metadata || '{}'),
-      url: `/uploads/${row.filename}`,
+    const mimeType = `image/${outputFormat === 'jpg' ? 'jpeg' : outputFormat}`
+    const stored = await persistBuffer({
+      userId: authed.user.id,
+      buffer: buffers[0],
+      contentType: mimeType,
+      originalName: `generated.${outputFormat === 'jpeg' ? 'jpg' : outputFormat}`,
     })
+    const { data: row, error: imageError } = await authed.supabase
+      .from('images')
+      .insert({
+        user_id: authed.user.id,
+        filename: stored.filename,
+        original_name: `generated-${stored.filename}`,
+        url: stored.url,
+        storage_key: stored.storageKey,
+        width,
+        height,
+        size: buffers[0].length,
+        mime_type: mimeType,
+        is_generated: true,
+        prompt,
+      })
+      .select('*')
+      .single()
+    if (imageError) throw imageError
+    const paramsJson = JSON.stringify({ size, quality, background, outputFormat, outputCompression, n, model: config.model })
+    const historyResult = await authed.supabase.from('generation_history').insert({
+      user_id: authed.user.id,
+      type: 'text2img',
+      prompt,
+      negative_prompt: negativePrompt || null,
+      style: null,
+      result_image_id: row.id,
+      parameters: JSON.parse(paramsJson),
+      status: 'done',
+    })
+    if (historyResult.error) throw historyResult.error
+
+    console.log(`[generate] text2img done | saved=${stored.url} | size=${buffers[0].length} bytes | id=${row.id}`)
+    res.json(serializeImageRow(row as ImageRow))
   } catch (err: any) {
     console.error('[generate] text2img failed:', err.message)
     res.status(500).json({ error: err.message })
@@ -222,6 +234,7 @@ router.post('/img2img', upload.fields([
   { name: 'reference', maxCount: 10 },
   { name: 'mask', maxCount: 1 },
 ]), async (req, res) => {
+  const authed = req as AuthenticatedRequest
   const {
     prompt,
     negativePrompt,
@@ -257,31 +270,45 @@ router.post('/img2img', upload.fields([
     })
 
     const { width, height } = parseSize(size)
-    const filename = `${uuid()}.png`
-    const filePath = path.join(uploadsDir, filename)
-    fs.writeFileSync(filePath, buffers[0])
-
-    const imgResult = db
-      .prepare(
-        `INSERT INTO images (filename, original_name, width, height, size, mime_type, is_generated, prompt)
-         VALUES (?, ?, ?, ?, ?, ?, 1, ?)`
-      )
-      .run(filename, `img2img-${filename}`, width, height, buffers[0].length, 'image/png', prompt)
-
-    const paramsJson = JSON.stringify({ size, quality, n, model: config.model })
-    db.prepare(
-      `INSERT INTO generation_history (type, prompt, negative_prompt, style, result_image_id, parameters, status)
-       VALUES ('img2img', ?, ?, ?, ?, ?, 'done')`
-    ).run(prompt, negativePrompt || null, null, imgResult.lastInsertRowid, paramsJson)
-
-    const row = db.prepare('SELECT * FROM images WHERE id = ?').get(imgResult.lastInsertRowid) as any
-    console.log(`[generate] img2img done | saved=${filename} | size=${buffers[0].length} bytes | id=${row.id}`)
-    res.json({
-      ...row,
-      tags: JSON.parse(row.tags || '[]'),
-      metadata: JSON.parse(row.metadata || '{}'),
-      url: `/uploads/${row.filename}`,
+    const stored = await persistBuffer({
+      userId: authed.user.id,
+      buffer: buffers[0],
+      contentType: 'image/png',
+      originalName: 'img2img.png',
     })
+    const { data: row, error: imageError } = await authed.supabase
+      .from('images')
+      .insert({
+        user_id: authed.user.id,
+        filename: stored.filename,
+        original_name: `img2img-${stored.filename}`,
+        url: stored.url,
+        storage_key: stored.storageKey,
+        width,
+        height,
+        size: buffers[0].length,
+        mime_type: 'image/png',
+        is_generated: true,
+        prompt,
+      })
+      .select('*')
+      .single()
+    if (imageError) throw imageError
+    const paramsJson = JSON.stringify({ size, quality, n, model: config.model })
+    const historyResult = await authed.supabase.from('generation_history').insert({
+      user_id: authed.user.id,
+      type: 'img2img',
+      prompt,
+      negative_prompt: negativePrompt || null,
+      style: null,
+      result_image_id: row.id,
+      parameters: JSON.parse(paramsJson),
+      status: 'done',
+    })
+    if (historyResult.error) throw historyResult.error
+
+    console.log(`[generate] img2img done | saved=${stored.url} | size=${buffers[0].length} bytes | id=${row.id}`)
+    res.json(serializeImageRow(row as ImageRow))
   } catch (err: any) {
     console.error('[generate] img2img failed:', err.message)
     res.status(500).json({ error: err.message })
@@ -289,11 +316,16 @@ router.post('/img2img', upload.fields([
 })
 
 // GET /api/generate/history
-router.get('/history', (_req, res) => {
-  const rows = db
-    .prepare('SELECT * FROM generation_history ORDER BY created_at DESC LIMIT 50')
-    .all()
-  res.json(rows)
+router.get('/history', async (req, res) => {
+  const authed = req as AuthenticatedRequest
+  const { data, error } = await authed.supabase
+    .from('generation_history')
+    .select('*, result_image:images(url)')
+    .eq('user_id', authed.user.id)
+    .order('created_at', { ascending: false })
+    .limit(50)
+  if (error) return res.status(500).json({ error: error.message })
+  res.json(data || [])
 })
 
 export default router

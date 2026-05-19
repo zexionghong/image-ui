@@ -1,5 +1,4 @@
 import { Router } from 'express'
-import { v4 as uuid } from 'uuid'
 import path from 'path'
 import fs from 'fs'
 import {
@@ -14,11 +13,14 @@ import {
   type WorkflowNode,
 } from '../workflowEngine.js'
 import { getS3UploadConfig, isS3UploadConfigured, uploadBufferToS3 } from '../s3Upload.js'
+import { persistBuffer, readMediaBuffer } from '../mediaStorage.js'
+import { requireAuth, type AuthenticatedRequest } from '../supabaseAuth.js'
 
 const uploadsDir = path.join(process.cwd(), 'public', 'uploads')
 fs.mkdirSync(uploadsDir, { recursive: true })
 
 const router = Router()
+router.use(requireAuth)
 
 interface WfConfig {
   baseUrl: string
@@ -28,6 +30,7 @@ interface WfConfig {
   videoApiKey: string
   videoModel: string
   publicBaseUrl?: string
+  userId: string
 }
 
 // Execute a single node
@@ -92,9 +95,8 @@ async function executeNode(node: WorkflowNode, edges: WorkflowEdge[], results: M
         } else {
           throw new Error('No image in response')
         }
-        const filename = `${uuid()}.png`
-        fs.writeFileSync(path.join(uploadsDir, filename), buffer)
-        return { type: 'image', imageUrl: `/uploads/${filename}` }
+        const stored = await persistBuffer({ userId: config.userId, buffer, contentType: 'image/png', originalName: 'workflow-image.png' })
+        return { type: 'image', imageUrl: stored.url }
       } else {
         // text2img
         const res = await fetch(`${base}/images/generations`, {
@@ -123,9 +125,8 @@ async function executeNode(node: WorkflowNode, edges: WorkflowEdge[], results: M
         } else {
           throw new Error('No image in response')
         }
-        const filename = `${uuid()}.png`
-        fs.writeFileSync(path.join(uploadsDir, filename), buffer)
-        return { type: 'image', imageUrl: `/uploads/${filename}` }
+        const stored = await persistBuffer({ userId: config.userId, buffer, contentType: 'image/png', originalName: 'workflow-image.png' })
+        return { type: 'image', imageUrl: stored.url }
       }
     }
 
@@ -185,9 +186,8 @@ async function executeNode(node: WorkflowNode, edges: WorkflowEdge[], results: M
           const videoUrl = statusData.content?.video_url
           const vidResp = await fetch(videoUrl)
           const vidBuffer = Buffer.from(await vidResp.arrayBuffer())
-          const filename = `${uuid()}.mp4`
-          fs.writeFileSync(path.join(uploadsDir, filename), vidBuffer)
-          return { type: 'video', videoUrl: `/uploads/${filename}` }
+          const stored = await persistBuffer({ userId: config.userId, buffer: vidBuffer, contentType: 'video/mp4', originalName: 'workflow-video.mp4' })
+          return { type: 'video', videoUrl: stored.url }
         }
         if (statusData.status === 'failed') {
           throw new Error(`Video generation failed: ${statusData.error || 'unknown error'}`)
@@ -217,9 +217,7 @@ async function readImageBuffer(imageUrl: string) {
     return fs.readFileSync(path.join(uploadsDir, filename))
   }
 
-  const imgResp = await fetch(imageUrl)
-  if (!imgResp.ok) throw new Error(`Failed to fetch image input: ${imgResp.status}`)
-  return Buffer.from(await imgResp.arrayBuffer())
+  return readMediaBuffer(imageUrl)
 }
 
 async function toProviderMediaUrl(mediaUrl: string, publicBaseUrl?: string) {
@@ -268,6 +266,7 @@ function getRequestBaseUrl(req: { protocol: string; get(name: string): string | 
 
 // POST /api/workflow/execute
 router.post('/execute', async (req, res) => {
+  const authed = req as AuthenticatedRequest
   const { nodes, edges, config, approvedResults } = req.body || {}
   if (!nodes || !edges) return res.status(400).json({ error: 'Missing nodes or edges' })
 
@@ -276,6 +275,7 @@ router.post('/execute', async (req, res) => {
     const workflowConfig = {
       ...config,
       publicBaseUrl: getRequestBaseUrl(req),
+      userId: authed.user.id,
     }
     const approved = (approvedResults || {}) as Record<string, unknown>
     const results = new Map<string, unknown>(Object.entries(approved))

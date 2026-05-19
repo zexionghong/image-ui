@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { ImageData, PaginationParams, PaginatedResponse } from '@/types'
+import { apiFetch } from '@/lib/api'
 
 const API_BASE = '/api'
 
@@ -15,8 +16,8 @@ interface ImageStore {
 
   fetchImages: (params?: Partial<PaginationParams>) => Promise<void>
   uploadImage: (file: File) => Promise<ImageData>
-  deleteImage: (id: number) => Promise<void>
-  updateImage: (id: number, data: Partial<ImageData>) => Promise<void>
+  deleteImage: (id: string) => Promise<void>
+  updateImage: (id: string, data: Partial<ImageData>) => Promise<void>
   setSelectedImage: (image: ImageData | null) => void
   setSearch: (search: string) => void
   setCategory: (category: string) => void
@@ -43,7 +44,7 @@ export const useImageStore = create<ImageStore>((set, get) => ({
       if (p.search) query.set('search', p.search)
       if (p.category) query.set('category', p.category)
 
-      const res = await fetch(`${API_BASE}/images?${query}`)
+      const res = await apiFetch(`${API_BASE}/images?${query}`)
       const data: PaginatedResponse<ImageData> = await res.json()
       set({ images: data.data, total: data.total, page: data.page, pageSize: data.pageSize })
     } catch (err) {
@@ -56,14 +57,14 @@ export const useImageStore = create<ImageStore>((set, get) => ({
   uploadImage: async (file) => {
     const formData = new FormData()
     formData.append('file', file)
-    const res = await fetch(`${API_BASE}/images/upload`, { method: 'POST', body: formData })
+    const res = await apiFetch(`${API_BASE}/images/upload`, { method: 'POST', body: formData })
     const image: ImageData = await res.json()
     set((s) => ({ images: [image, ...s.images], total: s.total + 1 }))
     return image
   },
 
   deleteImage: async (id) => {
-    await fetch(`${API_BASE}/images/${id}`, { method: 'DELETE' })
+    await apiFetch(`${API_BASE}/images/${id}`, { method: 'DELETE' })
     set((s) => ({
       images: s.images.filter((img) => img.id !== id),
       total: s.total - 1,
@@ -72,7 +73,7 @@ export const useImageStore = create<ImageStore>((set, get) => ({
   },
 
   updateImage: async (id, data) => {
-    const res = await fetch(`${API_BASE}/images/${id}`, {
+    const res = await apiFetch(`${API_BASE}/images/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),

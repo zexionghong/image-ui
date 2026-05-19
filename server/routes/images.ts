@@ -1,137 +1,138 @@
 import { Router } from 'express'
 import multer from 'multer'
-import path from 'path'
-import fs from 'fs'
-import { v4 as uuid } from 'uuid'
 import sharp from 'sharp'
-import db from '../db.js'
+import { serializeImageRow, type ImageRow } from '../imageRows.js'
+import { persistBuffer } from '../mediaStorage.js'
+import { requireAuth, type AuthenticatedRequest } from '../supabaseAuth.js'
 
-const uploadsDir = path.join(process.cwd(), 'public', 'uploads')
-fs.mkdirSync(uploadsDir, { recursive: true })
-
-const storage = multer.diskStorage({
-  destination: uploadsDir,
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname)
-    cb(null, `${uuid()}${ext}`)
-  },
-})
-const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } })
-
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } })
 const router = Router()
 
+router.use(requireAuth)
+
 // GET /api/images
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
+  const authed = req as AuthenticatedRequest
   const page = Math.max(1, Number(req.query.page) || 1)
   const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 20))
-  const search = (req.query.search as string) || ''
-  const category = (req.query.category as string) || ''
+  const search = String(req.query.search || '')
+  const category = String(req.query.category || '')
+  const from = (page - 1) * pageSize
+  const to = from + pageSize - 1
 
-  let where = 'WHERE 1=1'
-  const params: unknown[] = []
+  let query = authed.supabase
+    .from('images')
+    .select('*', { count: 'exact' })
+    .eq('user_id', authed.user.id)
+    .order('created_at', { ascending: false })
+    .range(from, to)
 
   if (search) {
-    where += ' AND (original_name LIKE ? OR tags LIKE ?)'
-    params.push(`%${search}%`, `%${search}%`)
+    query = query.ilike('original_name', `%${search}%`)
   }
   if (category) {
-    where += ' AND category = ?'
-    params.push(category)
+    query = query.eq('category', category)
   }
 
-  const countRow = db.prepare(`SELECT COUNT(*) as total FROM images ${where}`).get(...params) as { total: number }
-  const rows = db
-    .prepare(`SELECT * FROM images ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
-    .all(...params, pageSize, (page - 1) * pageSize)
-
-  const data = (rows as any[]).map((row) => ({
-    ...row,
-    tags: JSON.parse(row.tags || '[]'),
-    metadata: JSON.parse(row.metadata || '{}'),
-    url: `/uploads/${row.filename}`,
-  }))
+  const { data, error, count } = await query
+  if (error) return res.status(500).json({ error: error.message })
 
   res.json({
-    data,
-    total: countRow.total,
+    data: (data || []).map((row) => serializeImageRow(row as ImageRow)),
+    total: count || 0,
     page,
     pageSize,
-    totalPages: Math.ceil(countRow.total / pageSize),
+    totalPages: Math.ceil((count || 0) / pageSize),
   })
 })
 
 // GET /api/images/:id
-router.get('/:id', (req, res) => {
-  const row = db.prepare('SELECT * FROM images WHERE id = ?').get(req.params.id) as any
-  if (!row) return res.status(404).json({ error: 'Not found' })
-  res.json({
-    ...row,
-    tags: JSON.parse(row.tags || '[]'),
-    metadata: JSON.parse(row.metadata || '{}'),
-    url: `/uploads/${row.filename}`,
-  })
+router.get('/:id', async (req, res) => {
+  const authed = req as AuthenticatedRequest
+  const { data, error } = await authed.supabase
+    .from('images')
+    .select('*')
+    .eq('user_id', authed.user.id)
+    .eq('id', req.params.id)
+    .maybeSingle()
+
+  if (error) return res.status(500).json({ error: error.message })
+  if (!data) return res.status(404).json({ error: 'Not found' })
+  res.json(serializeImageRow(data as ImageRow))
 })
 
 // POST /api/images/upload
 router.post('/upload', upload.single('file'), async (req, res) => {
+  const authed = req as AuthenticatedRequest
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
 
-  let width = 0, height = 0
+  let width = 0
+  let height = 0
   try {
-    const meta = await sharp(req.file.path).metadata()
+    const meta = await sharp(req.file.buffer).metadata()
     width = meta.width || 0
     height = meta.height || 0
   } catch {}
 
-  const result = db
-    .prepare(
-      `INSERT INTO images (filename, original_name, width, height, size, mime_type)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    )
-    .run(req.file.filename, req.file.originalname, width, height, req.file.size, req.file.mimetype)
-
-  const row = db.prepare('SELECT * FROM images WHERE id = ?').get(result.lastInsertRowid) as any
-  res.json({
-    ...row,
-    tags: JSON.parse(row.tags || '[]'),
-    metadata: JSON.parse(row.metadata || '{}'),
-    url: `/uploads/${row.filename}`,
+  const stored = await persistBuffer({
+    userId: authed.user.id,
+    buffer: req.file.buffer,
+    contentType: req.file.mimetype,
+    originalName: req.file.originalname,
   })
+
+  const { data, error } = await authed.supabase
+    .from('images')
+    .insert({
+      user_id: authed.user.id,
+      filename: stored.filename,
+      original_name: req.file.originalname,
+      url: stored.url,
+      storage_key: stored.storageKey,
+      width,
+      height,
+      size: req.file.size,
+      mime_type: req.file.mimetype,
+    })
+    .select('*')
+    .single()
+
+  if (error) return res.status(500).json({ error: error.message })
+  res.json(serializeImageRow(data as ImageRow))
 })
 
 // PATCH /api/images/:id
-router.patch('/:id', (req, res) => {
+router.patch('/:id', async (req, res) => {
+  const authed = req as AuthenticatedRequest
   const { category, tags } = req.body
-  const updates: string[] = []
-  const params: unknown[] = []
+  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() }
 
-  if (category !== undefined) { updates.push('category = ?'); params.push(category) }
-  if (tags !== undefined) { updates.push('tags = ?'); params.push(JSON.stringify(tags)) }
-  updates.push('updated_at = CURRENT_TIMESTAMP')
+  if (category !== undefined) patch.category = category
+  if (tags !== undefined) patch.tags = tags
 
-  if (updates.length > 1) {
-    db.prepare(`UPDATE images SET ${updates.join(', ')} WHERE id = ?`).run(...params, req.params.id)
-  }
+  const { data, error } = await authed.supabase
+    .from('images')
+    .update(patch)
+    .eq('user_id', authed.user.id)
+    .eq('id', req.params.id)
+    .select('*')
+    .maybeSingle()
 
-  const row = db.prepare('SELECT * FROM images WHERE id = ?').get(req.params.id) as any
-  if (!row) return res.status(404).json({ error: 'Not found' })
-  res.json({
-    ...row,
-    tags: JSON.parse(row.tags || '[]'),
-    metadata: JSON.parse(row.metadata || '{}'),
-    url: `/uploads/${row.filename}`,
-  })
+  if (error) return res.status(500).json({ error: error.message })
+  if (!data) return res.status(404).json({ error: 'Not found' })
+  res.json(serializeImageRow(data as ImageRow))
 })
 
 // DELETE /api/images/:id
-router.delete('/:id', (req, res) => {
-  const row = db.prepare('SELECT * FROM images WHERE id = ?').get(req.params.id) as any
-  if (!row) return res.status(404).json({ error: 'Not found' })
+router.delete('/:id', async (req, res) => {
+  const authed = req as AuthenticatedRequest
+  const { error } = await authed.supabase
+    .from('images')
+    .delete()
+    .eq('user_id', authed.user.id)
+    .eq('id', req.params.id)
 
-  const filePath = path.join(uploadsDir, row.filename)
-  if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
-
-  db.prepare('DELETE FROM images WHERE id = ?').run(req.params.id)
+  if (error) return res.status(500).json({ error: error.message })
   res.json({ success: true })
 })
 

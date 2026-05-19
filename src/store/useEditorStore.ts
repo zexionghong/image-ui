@@ -4,7 +4,7 @@ import { DEFAULT_FILTERS } from '@/types'
 
 interface EditorStore {
   currentImage: string | null
-  currentImageId: number | null
+  currentImageId: string | null
   zoom: number
   pan: { x: number; y: number }
   filters: FilterParams
@@ -15,7 +15,7 @@ interface EditorStore {
   historyIndex: number
   isSaving: boolean
 
-  setCurrentImage: (url: string | null, id?: number) => void
+  setCurrentImage: (url: string | null, id?: string) => void
   setZoom: (zoom: number) => void
   setPan: (pan: { x: number; y: number }) => void
   resetView: () => void

@@ -300,8 +300,8 @@ export function GeneratePage() {
                   {history.map((item) => (
                     <Card key={item.id} className="overflow-hidden cursor-pointer hover:border-primary/50 transition-colors">
                       <div className="aspect-square bg-muted flex items-center justify-center">
-                        {item.status === 'done' && item.result_image_id ? (
-                          <img src={`/uploads/${item.result_image_id}`} alt="" className="w-full h-full object-cover" />
+                        {item.status === 'done' && item.result_image_id && (item as any).result_image?.url ? (
+                          <img src={(item as any).result_image.url} alt="" className="w-full h-full object-cover" />
                         ) : (
                           <Badge variant={item.status === 'error' ? 'destructive' : 'secondary'}>{item.status}</Badge>
                         )}

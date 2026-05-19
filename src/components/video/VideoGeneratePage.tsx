@@ -33,6 +33,7 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import { hasVideoModeInput, type VideoMode } from '@/lib/videoModeConfig'
+import { apiFetch } from '@/lib/api'
 import { toast } from 'sonner'
 
 const MODES: Array<{ value: VideoMode; labelKey: string; icon: typeof Video }> = [
@@ -328,7 +329,7 @@ export function VideoGeneratePage() {
     setMentionOpen(referenceImagePreviews.length > 0 && nextPrompt[cursor - 1] === '@')
   }
 
-  const refreshTaskStatus = async (item: { id: number; result_image_id: number | null; status: string; parameters: unknown }) => {
+  const refreshTaskStatus = async (item: { id: string; result_image_id: string | null; status: string; parameters: unknown }) => {
     const params = parseParameters(item.parameters)
     const providerTaskId = typeof params.providerTaskId === 'string' ? params.providerTaskId : ''
     if (!providerTaskId) {
@@ -338,7 +339,7 @@ export function VideoGeneratePage() {
 
     try {
       const { videoBaseUrl, videoApiKey } = useApiConfigStore.getState()
-      const res = await fetch(`/api/video/status/${providerTaskId}`, {
+      const res = await apiFetch(`/api/video/status/${providerTaskId}`, {
         headers: {
           'x-video-base-url': videoBaseUrl,
           'x-video-api-key': videoApiKey,
@@ -394,7 +395,7 @@ export function VideoGeneratePage() {
     anchor.click()
   }
 
-  const openHistoryResult = async (item: { result_image_id: number | null; status: string; parameters: unknown }, params: Record<string, unknown>) => {
+  const openHistoryResult = async (item: { result_image_id: string | null; status: string; parameters: unknown }, params: Record<string, unknown>) => {
     try {
       const remoteVideoUrl = typeof params.remoteVideoUrl === 'string' ? params.remoteVideoUrl : ''
       if (remoteVideoUrl) {
@@ -405,7 +406,7 @@ export function VideoGeneratePage() {
         toast.error(t('missingResultLink'))
         return
       }
-      const res = await fetch(`/api/images/${item.result_image_id}`)
+      const res = await apiFetch(`/api/images/${item.result_image_id}`)
       if (!res.ok) throw new Error(`Failed to load result link (${res.status})`)
       const image = await res.json()
       if (!image?.url) throw new Error(t('missingResultLink'))

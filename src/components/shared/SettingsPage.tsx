@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
@@ -8,8 +8,9 @@ import { Separator } from '@/components/ui/separator'
 import { useTranslations } from '@/i18n/compat/client'
 import { useApiConfigStore } from '@/store/useApiConfigStore'
 import { useThemeStore } from '@/store/useThemeStore'
-import { Save, Eye, EyeOff } from 'lucide-react'
+import { LogOut, Save, Eye, EyeOff } from 'lucide-react'
 import { toast } from 'sonner'
+import { supabase } from '@/lib/supabase'
 
 export function SettingsPage() {
   const t = useTranslations('settings')
@@ -23,6 +24,19 @@ export function SettingsPage() {
   const [localVideoUrl, setLocalVideoUrl] = useState(videoBaseUrl)
   const [localVideoKey, setLocalVideoKey] = useState(videoApiKey)
   const [localVideoModel, setLocalVideoModel] = useState(videoModel)
+  const [authEmail, setAuthEmail] = useState('')
+  const [authPassword, setAuthPassword] = useState('')
+  const [authUserEmail, setAuthUserEmail] = useState<string | null>(null)
+  const [authLoading, setAuthLoading] = useState(false)
+
+  useEffect(() => {
+    if (!supabase) return
+    void supabase.auth.getUser().then(({ data }) => setAuthUserEmail(data.user?.email ?? null))
+    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+      setAuthUserEmail(session?.user.email ?? null)
+    })
+    return () => data.subscription.unsubscribe()
+  }, [])
 
   const handleSave = () => {
     setBaseUrl(localUrl)
@@ -38,12 +52,77 @@ export function SettingsPage() {
     toast.success(t('apiSaved'))
   }
 
+  const handleAuthSubmit = async () => {
+    if (!supabase) {
+      toast.error('Supabase is not configured')
+      return
+    }
+    setAuthLoading(true)
+    try {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: authEmail,
+        password: authPassword,
+      })
+      if (error) throw error
+      toast.success('Signed in')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Sign in failed')
+    } finally {
+      setAuthLoading(false)
+    }
+  }
+
+  const handleSignOut = async () => {
+    if (!supabase) return
+    await supabase.auth.signOut()
+    toast.success('Signed out')
+  }
+
   return (
     <div className="mx-auto max-w-2xl p-6 space-y-6">
       <div>
         <h2 className="text-2xl font-bold">{t('title')}</h2>
         <p className="text-muted-foreground">{t('subtitle')}</p>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Supabase Auth</CardTitle>
+          <CardDescription>Sign in before using gallery, resources, generation, or video history.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {authUserEmail ? (
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <Label>Current user</Label>
+                <p className="truncate text-sm text-muted-foreground">{authUserEmail}</p>
+              </div>
+              <Button variant="outline" onClick={handleSignOut}>
+                <LogOut className="h-4 w-4 mr-1.5" />
+                Sign out
+              </Button>
+            </div>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
+              <Input
+                type="email"
+                value={authEmail}
+                onChange={(event) => setAuthEmail(event.target.value)}
+                placeholder="Email"
+              />
+              <Input
+                type="password"
+                value={authPassword}
+                onChange={(event) => setAuthPassword(event.target.value)}
+                placeholder="Password"
+              />
+              <Button onClick={handleAuthSubmit} disabled={authLoading}>
+                Sign in
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* API Config */}
       <Card>

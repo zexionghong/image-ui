@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { GenerationHistory } from '@/types'
 import { useApiConfigStore } from './useApiConfigStore'
 import { filterMediaForMode, hasVideoModeInput, type VideoMode } from '@/lib/videoModeConfig'
+import { apiFetch } from '@/lib/api'
 
 const API_BASE = '/api'
 const POLL_INTERVAL_MS = 3000
@@ -253,7 +254,7 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
         formData.append('referenceAudio', media.referenceAudio)
       }
 
-      const submitRes = await fetch(`${API_BASE}/video/generate`, {
+      const submitRes = await apiFetch(`${API_BASE}/video/generate`, {
         method: 'POST',
         body: formData,
       })
@@ -274,7 +275,7 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
       const poll = async () => {
         if (!isCurrentGeneration(generationId)) return
         try {
-          const statusRes = await fetch(`${API_BASE}/video/status/${submitData.taskId}`, {
+          const statusRes = await apiFetch(`${API_BASE}/video/status/${submitData.taskId}`, {
             headers: {
               'x-video-base-url': videoBaseUrl,
               'x-video-api-key': videoApiKey,
@@ -394,7 +395,7 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
   fetchHistory: async (generationId) => {
     try {
       const requestId = ++activeHistoryRequestId
-      const res = await fetch(`${API_BASE}/video/history`)
+      const res = await apiFetch(`${API_BASE}/video/history`)
       if (!res.ok) throw new Error(`Failed to load video history (${res.status})`)
       const data = await res.json()
       if (requestId !== activeHistoryRequestId) return

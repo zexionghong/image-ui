@@ -2,6 +2,7 @@ import { memo, useRef, useState } from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { ImagePlus, Loader2 } from 'lucide-react'
 import { useWorkflowStore } from '@/store/useWorkflowStore'
+import { apiFetch } from '@/lib/api'
 
 function ImageInputNode({ id, data }: NodeProps) {
   const fileRef = useRef<HTMLInputElement>(null)
@@ -13,7 +14,7 @@ function ImageInputNode({ id, data }: NodeProps) {
     try {
       const form = new FormData()
       form.append('file', file)
-      const res = await fetch('/api/images/upload', { method: 'POST', body: form })
+      const res = await apiFetch('/api/images/upload', { method: 'POST', body: form })
       const data = await res.json()
       if (data.url) {
         updateNodeData(id, { imageUrl: data.url })

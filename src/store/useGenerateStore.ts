@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { GenerationHistory } from '@/types'
 import { useApiConfigStore } from './useApiConfigStore'
+import { apiFetch } from '@/lib/api'
 
 const API_BASE = '/api'
 
@@ -122,7 +123,7 @@ export const useGenerateStore = create<GenerateStore>((set, get) => ({
         set((s) => ({ progress: Math.min(s.progress + Math.random() * 15, 90) }))
       }, 500)
 
-      const res = await fetch(`${API_BASE}/generate/${type}`, {
+      const res = await apiFetch(`${API_BASE}/generate/${type}`, {
         method: 'POST',
         body: formData,
       })
@@ -140,7 +141,7 @@ export const useGenerateStore = create<GenerateStore>((set, get) => ({
 
   fetchHistory: async () => {
     try {
-      const res = await fetch(`${API_BASE}/generate/history`)
+      const res = await apiFetch(`${API_BASE}/generate/history`)
       const data = await res.json()
       set({ history: data })
     } catch (err) {

@@ -40,7 +40,7 @@ export function EditorPage({ imageId }: EditorPageProps) {
   }, [fetchImages, images.length])
 
   useEffect(() => {
-    const img = images.find((i) => i.id === Number(imageId))
+    const img = images.find((i) => i.id === imageId)
     if (img) setCurrentImage(img.url, img.id)
   }, [imageId, images, setCurrentImage])
 

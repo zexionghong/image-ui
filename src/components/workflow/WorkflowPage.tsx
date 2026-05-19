@@ -9,6 +9,7 @@ import { PropertyPanel } from './PropertyPanel'
 import { useTranslations } from '@/i18n/compat/client'
 import { Button } from '@/components/ui/button'
 import { isWorkflowConnectionValid } from '@/lib/workflowConnections'
+import { apiFetch } from '@/lib/api'
 import { toast } from 'sonner'
 
 const ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -66,7 +67,7 @@ export function WorkflowPage() {
     setExecuting(true)
     setAllNodeStatus('running')
     try {
-      const res = await fetch('/api/workflow/execute', {
+      const res = await apiFetch('/api/workflow/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

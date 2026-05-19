@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { ImageData, ResourceProject } from '@/types'
 import { useApiConfigStore } from './useApiConfigStore'
+import { apiFetch } from '@/lib/api'
 import {
   buildThreeViewGenerationRequests,
   type ThreeViewAngle,
@@ -18,16 +19,16 @@ interface CreateProjectInput {
 
 interface ResourceStore {
   projects: ResourceProject[]
-  selectedProjectId: number | null
+  selectedProjectId: string | null
   loading: boolean
-  generatingProjectId: number | null
+  generatingProjectId: string | null
   generationProgress: number
 
   fetchProjects: () => Promise<void>
   createProject: (input: CreateProjectInput) => Promise<ResourceProject>
-  selectProject: (id: number | null) => void
-  addProjectAsset: (projectId: number, imageId: number, role: ThreeViewAngle, sortOrder: number) => Promise<ResourceProject>
-  generateThreeViews: (projectId: number, input: ThreeViewGenerationInput) => Promise<ResourceProject>
+  selectProject: (id: string | null) => void
+  addProjectAsset: (projectId: string, imageId: string, role: ThreeViewAngle, sortOrder: number) => Promise<ResourceProject>
+  generateThreeViews: (projectId: string, input: ThreeViewGenerationInput) => Promise<ResourceProject>
 }
 
 function upsertProject(projects: ResourceProject[], project: ResourceProject) {
@@ -46,7 +47,7 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
   fetchProjects: async () => {
     set({ loading: true })
     try {
-      const res = await fetch(`${API_BASE}/resources/projects`)
+      const res = await apiFetch(`${API_BASE}/resources/projects`)
       if (!res.ok) throw new Error(`Failed to load resource projects (${res.status})`)
       const projects: ResourceProject[] = await res.json()
       set((state) => ({
@@ -59,7 +60,7 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
   },
 
   createProject: async (input) => {
-    const res = await fetch(`${API_BASE}/resources/projects`, {
+    const res = await apiFetch(`${API_BASE}/resources/projects`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
@@ -79,7 +80,7 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
   selectProject: (selectedProjectId) => set({ selectedProjectId }),
 
   addProjectAsset: async (projectId, imageId, role, sortOrder) => {
-    const res = await fetch(`${API_BASE}/resources/projects/${projectId}/assets`, {
+    const res = await apiFetch(`${API_BASE}/resources/projects/${projectId}/assets`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ imageId, role, sortOrder }),
@@ -114,7 +115,7 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
         formData.append('apiKey', apiKey)
         formData.append('model', model)
 
-        const generateRes = await fetch(`${API_BASE}/generate/text2img`, {
+        const generateRes = await apiFetch(`${API_BASE}/generate/text2img`, {
           method: 'POST',
           body: formData,
         })

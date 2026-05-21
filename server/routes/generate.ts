@@ -3,6 +3,7 @@ import multer from 'multer'
 import { serializeImageRow, type ImageRow } from '../imageRows.js'
 import { persistBuffer, readMediaBuffer } from '../mediaStorage.js'
 import { requireAuth, type AuthenticatedRequest } from '../supabaseAuth.js'
+import { optimizeImagePrompt, type PromptOptimizationResult } from '../promptOptimizer.js'
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } })
 const router = Router()
@@ -152,6 +153,22 @@ function resolveConfig(body: any) {
   }
 }
 
+export function mergeGenerationParameters(
+  parameters: Record<string, unknown>,
+  optimization: PromptOptimizationResult,
+) {
+  return {
+    ...parameters,
+    originalPrompt: optimization.originalPrompt,
+    originalNegativePrompt: optimization.originalNegativePrompt,
+    optimizedPrompt: optimization.optimizedPrompt,
+    optimizedNegativePrompt: optimization.optimizedNegativePrompt,
+    intentSummary: optimization.intentSummary,
+    optimizationNotes: optimization.optimizationNotes,
+    optimizerUsedFallback: optimization.usedFallback,
+  }
+}
+
 async function createGenerationTask(req: AuthenticatedRequest, input: {
   type: string
   prompt: string
@@ -223,10 +240,25 @@ router.post('/text2img', upload.none(), async (req, res) => {
   const config = resolveConfig(req.body)
   console.log(`[generate] POST /text2img | model=${config.model} | base=${config.baseUrl} | apiKey=${config.apiKey ? '***' : '(empty)'}`)
 
-  const parameters = { size, quality, background, outputFormat, outputCompression, n, model: config.model }
+  const baseParameters = { size, quality, background, outputFormat, outputCompression, n, model: config.model }
   let historyId: string | null = null
 
   try {
+    const optimization = await optimizeImagePrompt({
+      prompt: String(prompt),
+      negativePrompt: negativePrompt ? String(negativePrompt) : '',
+      mode: 'text2img',
+      hasReferenceImages: false,
+      size: String(size),
+      quality: String(quality),
+      background: String(background),
+      outputFormat: String(outputFormat),
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey,
+      model: config.model,
+    })
+    const parameters = mergeGenerationParameters(baseParameters, optimization)
+
     historyId = await createGenerationTask(authed, {
       type: 'text2img',
       prompt,
@@ -235,8 +267,8 @@ router.post('/text2img', upload.none(), async (req, res) => {
     })
 
     const buffers = await callImageApi({
-      prompt,
-      negativePrompt,
+      prompt: optimization.optimizedPrompt,
+      negativePrompt: optimization.optimizedNegativePrompt,
       size,
       quality,
       background,
@@ -267,7 +299,7 @@ router.post('/text2img', upload.none(), async (req, res) => {
         size: buffers[0].length,
         mime_type: mimeType,
         is_generated: true,
-        prompt,
+        prompt: optimization.originalPrompt,
       })
       .select('*')
       .single()
@@ -285,9 +317,19 @@ router.post('/text2img', upload.none(), async (req, res) => {
     console.log(`[generate] text2img task done | historyId=${historyId} | imageId=${row.id}`)
 
     console.log(`[generate] text2img done | saved=${stored.url} | size=${buffers[0].length} bytes | id=${row.id}`)
-    res.json({ ...serializeImageRow(row as ImageRow), generation_history_id: historyId })
+    res.json({
+      ...serializeImageRow(row as ImageRow),
+      generation_history_id: historyId,
+      originalPrompt: optimization.originalPrompt,
+      originalNegativePrompt: optimization.originalNegativePrompt,
+      optimizedPrompt: optimization.optimizedPrompt,
+      optimizedNegativePrompt: optimization.optimizedNegativePrompt,
+      intentSummary: optimization.intentSummary,
+      optimizationNotes: optimization.optimizationNotes,
+      optimizerUsedFallback: optimization.usedFallback,
+    })
   } catch (err: any) {
-    await markGenerationTaskFailed(authed, historyId, err, parameters)
+    await markGenerationTaskFailed(authed, historyId, err, baseParameters)
     console.error('[generate] text2img failed:', err.message)
     res.status(500).json({ error: err.message, generation_history_id: historyId })
   }
@@ -318,10 +360,25 @@ router.post('/img2img', upload.fields([
   const config = resolveConfig(req.body)
   console.log(`[generate] POST /img2img | model=${config.model} | base=${config.baseUrl} | apiKey=${config.apiKey ? '***' : '(empty)'} | images=${files.length} | mask=${!!maskFile} | fidelity=${inputFidelity || 'default'}`)
 
-  const parameters = { size, quality, n, model: config.model, inputFidelity: inputFidelity || null, hasReferenceUrl: Boolean(referenceUrl) }
+  const baseParameters = { size, quality, n, model: config.model, inputFidelity: inputFidelity || null, hasReferenceUrl: Boolean(referenceUrl) }
   let historyId: string | null = null
 
   try {
+    const optimization = await optimizeImagePrompt({
+      prompt: String(prompt),
+      negativePrompt: negativePrompt ? String(negativePrompt) : '',
+      mode: 'img2img',
+      hasReferenceImages: true,
+      size: String(size),
+      quality: String(quality),
+      background: 'auto',
+      outputFormat: 'png',
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey,
+      model: config.model,
+    })
+    const parameters = mergeGenerationParameters(baseParameters, optimization)
+
     historyId = await createGenerationTask(authed, {
       type: 'img2img',
       prompt,
@@ -335,8 +392,8 @@ router.post('/img2img', upload.fields([
     }
 
     const buffers = await callImageApi({
-      prompt,
-      negativePrompt,
+      prompt: optimization.optimizedPrompt,
+      negativePrompt: optimization.optimizedNegativePrompt,
       size,
       quality,
       background: 'auto',
@@ -369,7 +426,7 @@ router.post('/img2img', upload.fields([
         size: buffers[0].length,
         mime_type: 'image/png',
         is_generated: true,
-        prompt,
+        prompt: optimization.originalPrompt,
       })
       .select('*')
       .single()
@@ -387,9 +444,19 @@ router.post('/img2img', upload.fields([
     console.log(`[generate] img2img task done | historyId=${historyId} | imageId=${row.id}`)
 
     console.log(`[generate] img2img done | saved=${stored.url} | size=${buffers[0].length} bytes | id=${row.id}`)
-    res.json({ ...serializeImageRow(row as ImageRow), generation_history_id: historyId })
+    res.json({
+      ...serializeImageRow(row as ImageRow),
+      generation_history_id: historyId,
+      originalPrompt: optimization.originalPrompt,
+      originalNegativePrompt: optimization.originalNegativePrompt,
+      optimizedPrompt: optimization.optimizedPrompt,
+      optimizedNegativePrompt: optimization.optimizedNegativePrompt,
+      intentSummary: optimization.intentSummary,
+      optimizationNotes: optimization.optimizationNotes,
+      optimizerUsedFallback: optimization.usedFallback,
+    })
   } catch (err: any) {
-    await markGenerationTaskFailed(authed, historyId, err, parameters)
+    await markGenerationTaskFailed(authed, historyId, err, baseParameters)
     console.error('[generate] img2img failed:', err.message)
     res.status(500).json({ error: err.message, generation_history_id: historyId })
   }

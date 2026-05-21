@@ -23,6 +23,13 @@ interface GenerateStore {
   result: string | null
   resultImageId: string | null
   generationHistoryId: string | null
+  originalPrompt: string | null
+  originalNegativePrompt: string | null
+  optimizedPrompt: string | null
+  optimizedNegativePrompt: string | null
+  intentSummary: string | null
+  optimizationNotes: string[]
+  optimizerUsedFallback: boolean
   history: GenerationHistory[]
 
   setPrompt: (prompt: string) => void
@@ -61,6 +68,13 @@ export const useGenerateStore = create<GenerateStore>((set, get) => ({
   result: null,
   resultImageId: null,
   generationHistoryId: null,
+  originalPrompt: null,
+  originalNegativePrompt: null,
+  optimizedPrompt: null,
+  optimizedNegativePrompt: null,
+  intentSummary: null,
+  optimizationNotes: [],
+  optimizerUsedFallback: false,
   history: [],
 
   setPrompt: (prompt) => set({ prompt }),
@@ -94,7 +108,20 @@ export const useGenerateStore = create<GenerateStore>((set, get) => ({
   generate: async (type) => {
     const { prompt, negativePrompt, size, quality, background, outputFormat, outputCompression, n, referenceImages, maskDataUrl, inputFidelity } = get()
     const { baseUrl, apiKey, model } = useApiConfigStore.getState()
-    set({ generating: true, progress: 0, result: null, resultImageId: null, generationHistoryId: null })
+    set({
+      generating: true,
+      progress: 0,
+      result: null,
+      resultImageId: null,
+      generationHistoryId: null,
+      originalPrompt: null,
+      originalNegativePrompt: null,
+      optimizedPrompt: null,
+      optimizedNegativePrompt: null,
+      intentSummary: null,
+      optimizationNotes: [],
+      optimizerUsedFallback: false,
+    })
 
     try {
       const formData = new FormData()
@@ -144,6 +171,13 @@ export const useGenerateStore = create<GenerateStore>((set, get) => ({
         result: data.url,
         resultImageId: data.id || null,
         generationHistoryId: data.generation_history_id || null,
+        originalPrompt: data.originalPrompt ?? prompt,
+        originalNegativePrompt: data.originalNegativePrompt ?? (negativePrompt || null),
+        optimizedPrompt: data.optimizedPrompt ?? null,
+        optimizedNegativePrompt: data.optimizedNegativePrompt ?? null,
+        intentSummary: data.intentSummary ?? null,
+        optimizationNotes: Array.isArray(data.optimizationNotes) ? data.optimizationNotes : [],
+        optimizerUsedFallback: Boolean(data.optimizerUsedFallback),
       })
       get().fetchHistory()
     } catch (err) {
@@ -199,6 +233,13 @@ export const useGenerateStore = create<GenerateStore>((set, get) => ({
       result: null,
       resultImageId: null,
       generationHistoryId: null,
+      originalPrompt: null,
+      originalNegativePrompt: null,
+      optimizedPrompt: null,
+      optimizedNegativePrompt: null,
+      intentSummary: null,
+      optimizationNotes: [],
+      optimizerUsedFallback: false,
     })
   },
 }))

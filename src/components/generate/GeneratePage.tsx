@@ -51,6 +51,7 @@ export function GeneratePage() {
   const {
     prompt, negativePrompt, size, quality, background, outputFormat, outputCompression, n,
     referencePreviews, maskDataUrl, inputFidelity, generating, progress, result, resultImageId, generationHistoryId, history,
+    originalPrompt, originalNegativePrompt, optimizedPrompt, optimizedNegativePrompt, intentSummary, optimizationNotes, optimizerUsedFallback,
     setPrompt, setNegativePrompt, setSize, setQuality, setBackground, setOutputFormat, setOutputCompression, setN,
     addReferenceImages, removeReferenceImage, setMaskDataUrl, setInputFidelity, generate, fetchHistory, deleteHistoryItem,
   } = useGenerateStore()
@@ -290,6 +291,36 @@ export function GeneratePage() {
                 <div className="flex justify-center overflow-hidden rounded-lg border border-border/60 bg-black/90 p-2">
                   <img src={result} alt="Generated" className="max-h-[min(62vh,720px)] max-w-full rounded object-contain" />
                 </div>
+                {optimizedPrompt ? (
+                  <div className="rounded-lg border border-border/60 bg-muted/20 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium">{t('optimizationLabel')}</p>
+                        <p className="text-xs text-muted-foreground">{intentSummary || t('optimizationDesc')}</p>
+                      </div>
+                      {optimizerUsedFallback ? <Badge variant="secondary">{t('optimizationFallback')}</Badge> : null}
+                    </div>
+                    <div className="mt-4 space-y-3">
+                      <div className="space-y-1">
+                        <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{t('originalPromptLabel')}</p>
+                        <p className="text-sm text-foreground">{originalPrompt || prompt}</p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{t('optimizedPromptLabel')}</p>
+                        <p className="text-sm text-foreground">{optimizedPrompt}</p>
+                      </div>
+                      {optimizedNegativePrompt || originalNegativePrompt ? (
+                        <div className="space-y-1">
+                          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{t('optimizedNegativePromptLabel')}</p>
+                          <p className="text-sm text-foreground">{optimizedNegativePrompt || originalNegativePrompt}</p>
+                        </div>
+                      ) : null}
+                      {optimizationNotes.length > 0 ? (
+                        <p className="text-xs text-muted-foreground">{optimizationNotes.join(' · ')}</p>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
                 <div className="flex flex-wrap justify-end gap-2">
                   <Button size="sm" variant="outline" onClick={() => openImage(result)}>
                     <Link2 className="mr-1.5 h-3.5 w-3.5" />打开

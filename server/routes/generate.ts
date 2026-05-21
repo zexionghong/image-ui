@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import multer from 'multer'
 import { serializeImageRow, type ImageRow } from '../imageRows.js'
-import { persistBuffer } from '../mediaStorage.js'
+import { persistBuffer, readMediaBuffer } from '../mediaStorage.js'
 import { requireAuth, type AuthenticatedRequest } from '../supabaseAuth.js'
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } })
@@ -306,18 +306,19 @@ router.post('/img2img', upload.fields([
     quality = 'auto',
     n = 1,
     inputFidelity,
+    referenceUrl,
   } = req.body || {}
 
   if (!prompt) return res.status(400).json({ error: 'Prompt is required' })
   const fields = req.files as Record<string, Express.Multer.File[]>
   const files = fields?.reference || []
-  if (files.length === 0) return res.status(400).json({ error: 'Reference image is required' })
+  if (files.length === 0 && !referenceUrl) return res.status(400).json({ error: 'Reference image is required' })
   const maskFile = fields?.mask?.[0] || null
 
   const config = resolveConfig(req.body)
   console.log(`[generate] POST /img2img | model=${config.model} | base=${config.baseUrl} | apiKey=${config.apiKey ? '***' : '(empty)'} | images=${files.length} | mask=${!!maskFile} | fidelity=${inputFidelity || 'default'}`)
 
-  const parameters = { size, quality, n, model: config.model, inputFidelity: inputFidelity || null }
+  const parameters = { size, quality, n, model: config.model, inputFidelity: inputFidelity || null, hasReferenceUrl: Boolean(referenceUrl) }
   let historyId: string | null = null
 
   try {
@@ -327,6 +328,11 @@ router.post('/img2img', upload.fields([
       negativePrompt: negativePrompt || null,
       parameters,
     })
+
+    const referenceBuffers = files.map((f) => f.buffer)
+    if (referenceUrl) {
+      referenceBuffers.push(await readMediaBuffer(String(referenceUrl)))
+    }
 
     const buffers = await callImageApi({
       prompt,
@@ -338,7 +344,7 @@ router.post('/img2img', upload.fields([
       outputCompression: 100,
       n: Number(n),
       ...config,
-      referenceImages: files.map((f) => f.buffer),
+      referenceImages: referenceBuffers,
       maskBuffer: maskFile ? maskFile.buffer : undefined,
       inputFidelity: inputFidelity || undefined,
     })

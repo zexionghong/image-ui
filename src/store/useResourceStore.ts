@@ -98,13 +98,17 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
     const requests = buildThreeViewGenerationRequests(input)
     const { baseUrl, apiKey, model } = useApiConfigStore.getState()
     let latestProject = get().projects.find((item) => item.id === projectId)
+    let frontImageUrl = ''
 
     set({ generatingProjectId: projectId, generationProgress: 0 })
     try {
       for (let index = 0; index < requests.length; index += 1) {
         const request = requests[index]
         const formData = new FormData()
-        formData.append('prompt', request.prompt)
+        const prompt = request.angle === 'front'
+          ? request.prompt
+          : `${request.prompt} 请严格参考输入图片中的同一主体身份、服装、比例、材质和配色，只改变当前视角，不改变角色设计。`
+        formData.append('prompt', prompt)
         formData.append('size', request.size)
         formData.append('quality', 'auto')
         formData.append('background', 'auto')
@@ -115,13 +119,32 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
         formData.append('apiKey', apiKey)
         formData.append('model', model)
 
-        const generateRes = await apiFetch(`${API_BASE}/generate/text2img`, {
+        const useReference = request.angle === 'front'
+          ? Boolean(input.sourceImageFile || input.sourceImageUrl?.trim())
+          : Boolean(frontImageUrl)
+
+        if (request.angle === 'front') {
+          if (input.sourceImageFile) {
+            formData.append('reference', input.sourceImageFile)
+          }
+          if (input.sourceImageUrl?.trim()) {
+            formData.append('referenceUrl', input.sourceImageUrl.trim())
+          }
+        } else if (frontImageUrl) {
+          formData.append('referenceUrl', frontImageUrl)
+          formData.append('inputFidelity', 'high')
+        }
+
+        const generateRes = await apiFetch(`${API_BASE}/generate/${useReference ? 'img2img' : 'text2img'}`, {
           method: 'POST',
           body: formData,
         })
         const image: ImageData & { error?: string } = await generateRes.json()
         if (!generateRes.ok) throw new Error(image.error || `Failed to generate ${request.label}`)
 
+        if (request.angle === 'front') {
+          frontImageUrl = image.url
+        }
         latestProject = await get().addProjectAsset(projectId, image.id, request.angle, index)
         set({ generationProgress: Math.round(((index + 1) / requests.length) * 100) })
       }

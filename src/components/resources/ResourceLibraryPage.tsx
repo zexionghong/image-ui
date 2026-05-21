@@ -6,9 +6,12 @@ import {
   Clipboard,
   FolderKanban,
   FolderPlus,
+  ImagePlus,
+  Link2,
   Loader2,
   Play,
   Sparkles,
+  X,
   Wand2,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -27,6 +30,7 @@ import {
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { DragDropZone } from '@/components/shared/DragDropZone'
 import { useLocale } from '@/i18n/compat/client'
 import { useApiConfigStore } from '@/store/useApiConfigStore'
 import { useResourceStore } from '@/store/useResourceStore'
@@ -66,6 +70,9 @@ export function ResourceLibraryPage() {
   const [style, setStyle] = useState('')
   const [notes, setNotes] = useState('')
   const [size, setSize] = useState<(typeof SIZE_OPTIONS)[number]>('1024x1024')
+  const [sourceImageFile, setSourceImageFile] = useState<File | null>(null)
+  const [sourceImagePreview, setSourceImagePreview] = useState<string | null>(null)
+  const [sourceImageUrl, setSourceImageUrl] = useState('')
 
   useEffect(() => {
     void fetchProjects()
@@ -127,11 +134,26 @@ export function ResourceLibraryPage() {
         style,
         notes,
         size,
+        sourceImageFile,
+        sourceImageUrl,
       })
       toast.success('三视图已生成并归档到项目')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '生成三视图失败')
     }
+  }
+
+  const pickSourceImage = (files: File[]) => {
+    const file = files[0] || null
+    if (sourceImagePreview) URL.revokeObjectURL(sourceImagePreview)
+    setSourceImageFile(file)
+    setSourceImagePreview(file ? URL.createObjectURL(file) : null)
+  }
+
+  const clearSourceImage = () => {
+    if (sourceImagePreview) URL.revokeObjectURL(sourceImagePreview)
+    setSourceImageFile(null)
+    setSourceImagePreview(null)
   }
 
   const copyPath = async (angle: ThreeViewAngle) => {
@@ -257,6 +279,34 @@ export function ResourceLibraryPage() {
                   </div>
                   <div className="space-y-2">
                     <Label>尺寸</Label>
+                    <div className="space-y-2">
+                      <Label>正视图参考</Label>
+                      {sourceImagePreview ? (
+                        <div className="relative overflow-hidden rounded-lg border border-border/60 bg-muted/30">
+                          <img src={sourceImagePreview} alt="" className="h-40 w-full object-cover" />
+                          <Button size="icon-sm" variant="secondary" className="absolute right-2 top-2" onClick={clearSourceImage}>
+                            <X className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      ) : (
+                        <DragDropZone onDrop={pickSourceImage} accept="image/*" multiple={false} className="h-28 rounded-lg">
+                          <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
+                            <ImagePlus className="h-5 w-5 text-muted-foreground" />
+                            <p className="text-xs text-muted-foreground">上传参考图生成正视图</p>
+                          </div>
+                        </DragDropZone>
+                      )}
+                      <div className="relative">
+                        <Link2 className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          value={sourceImageUrl}
+                          onChange={(event) => setSourceImageUrl(event.target.value)}
+                          placeholder="或粘贴图片 URL"
+                          className="pl-9"
+                        />
+                      </div>
+                      <p className="text-[11px] text-muted-foreground">正视图会先生成并上传到 OSS，侧面和背面会使用生成后的正视图 URL 作为参考。</p>
+                    </div>
                     <Select value={size} onValueChange={(value) => setSize(value as typeof size)}>
                       <SelectTrigger>
                         <SelectValue />

@@ -17,6 +17,8 @@ export interface ThreeViewGenerationInput {
   style?: string
   notes?: string
   size: string
+  sourceImageFile?: File | null
+  sourceImageUrl?: string
 }
 
 export interface ThreeViewGenerationRequest {

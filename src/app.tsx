@@ -3,6 +3,8 @@ import { RouterProvider, createRouter, createRootRoute, createRoute, redirect, O
 import { Toaster } from 'sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { AppLayout } from '@/components/layout/AppLayout'
+import { LoginPage } from '@/components/auth/LoginPage'
+import { RegisterPage } from '@/components/auth/RegisterPage'
 import { GalleryPage } from '@/components/gallery/GalleryPage'
 import { EditorPage } from '@/components/editor/EditorPage'
 import { GeneratePage } from '@/components/generate/GeneratePage'
@@ -12,6 +14,9 @@ import { ResourceLibraryPage } from '@/components/resources/ResourceLibraryPage'
 import { SettingsPage } from '@/components/shared/SettingsPage'
 import { I18nProvider } from '@/i18n/compat/client'
 import { locales, defaultLocale, type Locale } from '@/i18n/config'
+import { buildAuthRedirectPath } from '@/lib/authRouting'
+import { supabase } from '@/lib/supabase'
+import { useAuthStore } from '@/store/useAuthStore'
 import { useThemeStore } from '@/store/useThemeStore'
 import zhMessages from '@/i18n/locales/zh.json'
 import enMessages from '@/i18n/locales/en.json'
@@ -24,11 +29,16 @@ const messagesMap: Record<Locale, Record<string, unknown>> = {
 // Root layout
 function RootLayout() {
   const theme = useThemeStore((s) => s.theme)
+  const bootstrap = useAuthStore((s) => s.bootstrap)
 
   // Apply theme class to <html> on mount and when it changes
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark')
   }, [theme])
+
+  useEffect(() => {
+    void bootstrap()
+  }, [bootstrap])
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -72,10 +82,32 @@ const localeRoute = createRoute({
   component: LocaleLayout,
 })
 
+async function requireAuthBeforeLoad(location: { pathname: string; searchStr?: string; hash?: string }) {
+  if (supabase) {
+    const { data } = await supabase.auth.getSession()
+    if (data.session?.access_token) return
+  }
+
+  throw redirect({ href: buildAuthRedirectPath(location.pathname, location.searchStr ?? '', location.hash ?? '') })
+}
+
+const loginRoute = createRoute({
+  getParentRoute: () => localeRoute,
+  path: '/login',
+  component: LoginPage,
+})
+
+const registerRoute = createRoute({
+  getParentRoute: () => localeRoute,
+  path: '/register',
+  component: RegisterPage,
+})
+
 // Gallery
 const galleryRoute = createRoute({
   getParentRoute: () => localeRoute,
   path: '/gallery',
+  beforeLoad: ({ location }) => requireAuthBeforeLoad(location),
   component: () => (
     <AppLayout>
       <GalleryPage />
@@ -87,6 +119,7 @@ const galleryRoute = createRoute({
 const editorRoute = createRoute({
   getParentRoute: () => localeRoute,
   path: '/editor/$id',
+  beforeLoad: ({ location }) => requireAuthBeforeLoad(location),
   component: () => {
     const { id } = editorRoute.useParams()
     return (
@@ -101,6 +134,7 @@ const editorRoute = createRoute({
 const generateRoute = createRoute({
   getParentRoute: () => localeRoute,
   path: '/generate',
+  beforeLoad: ({ location }) => requireAuthBeforeLoad(location),
   component: () => (
     <AppLayout>
       <GeneratePage />
@@ -112,6 +146,7 @@ const generateRoute = createRoute({
 const resourcesRoute = createRoute({
   getParentRoute: () => localeRoute,
   path: '/resources',
+  beforeLoad: ({ location }) => requireAuthBeforeLoad(location),
   component: () => (
     <AppLayout>
       <ResourceLibraryPage />
@@ -123,6 +158,7 @@ const resourcesRoute = createRoute({
 const settingsRoute = createRoute({
   getParentRoute: () => localeRoute,
   path: '/settings',
+  beforeLoad: ({ location }) => requireAuthBeforeLoad(location),
   component: () => (
     <AppLayout>
       <SettingsPage />
@@ -134,6 +170,7 @@ const settingsRoute = createRoute({
 const videoGenerateRoute = createRoute({
   getParentRoute: () => localeRoute,
   path: '/video-generate',
+  beforeLoad: ({ location }) => requireAuthBeforeLoad(location),
   component: () => (
     <AppLayout>
       <VideoGeneratePage />
@@ -145,6 +182,7 @@ const videoGenerateRoute = createRoute({
 const workflowRoute = createRoute({
   getParentRoute: () => localeRoute,
   path: '/workflow',
+  beforeLoad: ({ location }) => requireAuthBeforeLoad(location),
   component: () => (
     <AppLayout>
       <WorkflowPage />
@@ -155,7 +193,17 @@ const workflowRoute = createRoute({
 // Build route tree
 const routeTree = rootRoute.addChildren([
   indexRoute,
-  localeRoute.addChildren([galleryRoute, editorRoute, generateRoute, resourcesRoute, videoGenerateRoute, workflowRoute, settingsRoute]),
+  localeRoute.addChildren([
+    loginRoute,
+    registerRoute,
+    galleryRoute,
+    editorRoute,
+    generateRoute,
+    resourcesRoute,
+    videoGenerateRoute,
+    workflowRoute,
+    settingsRoute,
+  ]),
 ])
 
 const router = createRouter({ routeTree })

@@ -152,6 +152,58 @@ function resolveConfig(body: any) {
   }
 }
 
+async function createGenerationTask(req: AuthenticatedRequest, input: {
+  type: string
+  prompt: string
+  negativePrompt?: string | null
+  parameters: Record<string, unknown>
+}) {
+  const { data, error } = await req.supabase
+    .from('generation_history')
+    .insert({
+      user_id: req.user.id,
+      type: input.type,
+      prompt: input.prompt,
+      negative_prompt: input.negativePrompt || null,
+      parameters: input.parameters,
+      status: 'processing',
+    })
+    .select('id')
+    .single()
+  if (error) {
+    console.error(`[generate] ${input.type} task insert failed:`, error)
+    throw error
+  }
+  console.log(`[generate] ${input.type} task inserted | historyId=${data.id}`)
+  return data.id as string
+}
+
+async function updateGenerationTask(req: AuthenticatedRequest, historyId: string, patch: Record<string, unknown>) {
+  const { error } = await req.supabase
+    .from('generation_history')
+    .update(patch)
+    .eq('user_id', req.user.id)
+    .eq('id', historyId)
+  if (error) {
+    console.error(`[generate] task update failed | historyId=${historyId}:`, error)
+    throw error
+  }
+}
+
+async function markGenerationTaskFailed(req: AuthenticatedRequest, historyId: string | null, error: unknown, parameters: Record<string, unknown>) {
+  if (!historyId) return
+  const message = error instanceof Error ? error.message : String(error)
+  try {
+    await updateGenerationTask(req, historyId, {
+      status: 'error',
+      parameters: { ...parameters, error: message },
+    })
+    console.log(`[generate] task marked error | historyId=${historyId} | error=${message}`)
+  } catch (updateError) {
+    console.error(`[generate] failed to mark task error | historyId=${historyId}:`, updateError)
+  }
+}
+
 // POST /api/generate/text2img
 router.post('/text2img', upload.none(), async (req, res) => {
   const authed = req as AuthenticatedRequest
@@ -171,7 +223,17 @@ router.post('/text2img', upload.none(), async (req, res) => {
   const config = resolveConfig(req.body)
   console.log(`[generate] POST /text2img | model=${config.model} | base=${config.baseUrl} | apiKey=${config.apiKey ? '***' : '(empty)'}`)
 
+  const parameters = { size, quality, background, outputFormat, outputCompression, n, model: config.model }
+  let historyId: string | null = null
+
   try {
+    historyId = await createGenerationTask(authed, {
+      type: 'text2img',
+      prompt,
+      negativePrompt: negativePrompt || null,
+      parameters,
+    })
+
     const buffers = await callImageApi({
       prompt,
       negativePrompt,
@@ -209,25 +271,25 @@ router.post('/text2img', upload.none(), async (req, res) => {
       })
       .select('*')
       .single()
-    if (imageError) throw imageError
-    const paramsJson = JSON.stringify({ size, quality, background, outputFormat, outputCompression, n, model: config.model })
-    const historyResult = await authed.supabase.from('generation_history').insert({
-      user_id: authed.user.id,
-      type: 'text2img',
-      prompt,
-      negative_prompt: negativePrompt || null,
-      style: null,
+    if (imageError) {
+      console.error('[generate] text2img image insert failed:', imageError)
+      throw imageError
+    }
+    console.log(`[generate] text2img image row inserted | imageId=${row.id} | url=${row.url}`)
+
+    await updateGenerationTask(authed, historyId, {
       result_image_id: row.id,
-      parameters: JSON.parse(paramsJson),
+      parameters,
       status: 'done',
     })
-    if (historyResult.error) throw historyResult.error
+    console.log(`[generate] text2img task done | historyId=${historyId} | imageId=${row.id}`)
 
     console.log(`[generate] text2img done | saved=${stored.url} | size=${buffers[0].length} bytes | id=${row.id}`)
-    res.json(serializeImageRow(row as ImageRow))
+    res.json({ ...serializeImageRow(row as ImageRow), generation_history_id: historyId })
   } catch (err: any) {
+    await markGenerationTaskFailed(authed, historyId, err, parameters)
     console.error('[generate] text2img failed:', err.message)
-    res.status(500).json({ error: err.message })
+    res.status(500).json({ error: err.message, generation_history_id: historyId })
   }
 })
 
@@ -255,7 +317,17 @@ router.post('/img2img', upload.fields([
   const config = resolveConfig(req.body)
   console.log(`[generate] POST /img2img | model=${config.model} | base=${config.baseUrl} | apiKey=${config.apiKey ? '***' : '(empty)'} | images=${files.length} | mask=${!!maskFile} | fidelity=${inputFidelity || 'default'}`)
 
+  const parameters = { size, quality, n, model: config.model, inputFidelity: inputFidelity || null }
+  let historyId: string | null = null
+
   try {
+    historyId = await createGenerationTask(authed, {
+      type: 'img2img',
+      prompt,
+      negativePrompt: negativePrompt || null,
+      parameters,
+    })
+
     const buffers = await callImageApi({
       prompt,
       negativePrompt,
@@ -295,25 +367,25 @@ router.post('/img2img', upload.fields([
       })
       .select('*')
       .single()
-    if (imageError) throw imageError
-    const paramsJson = JSON.stringify({ size, quality, n, model: config.model })
-    const historyResult = await authed.supabase.from('generation_history').insert({
-      user_id: authed.user.id,
-      type: 'img2img',
-      prompt,
-      negative_prompt: negativePrompt || null,
-      style: null,
+    if (imageError) {
+      console.error('[generate] img2img image insert failed:', imageError)
+      throw imageError
+    }
+    console.log(`[generate] img2img image row inserted | imageId=${row.id} | url=${row.url}`)
+
+    await updateGenerationTask(authed, historyId, {
       result_image_id: row.id,
-      parameters: JSON.parse(paramsJson),
+      parameters,
       status: 'done',
     })
-    if (historyResult.error) throw historyResult.error
+    console.log(`[generate] img2img task done | historyId=${historyId} | imageId=${row.id}`)
 
     console.log(`[generate] img2img done | saved=${stored.url} | size=${buffers[0].length} bytes | id=${row.id}`)
-    res.json(serializeImageRow(row as ImageRow))
+    res.json({ ...serializeImageRow(row as ImageRow), generation_history_id: historyId })
   } catch (err: any) {
+    await markGenerationTaskFailed(authed, historyId, err, parameters)
     console.error('[generate] img2img failed:', err.message)
-    res.status(500).json({ error: err.message })
+    res.status(500).json({ error: err.message, generation_history_id: historyId })
   }
 })
 
@@ -322,12 +394,90 @@ router.get('/history', async (req, res) => {
   const authed = req as AuthenticatedRequest
   const { data, error } = await authed.supabase
     .from('generation_history')
-    .select('*, result_image:images(url)')
+    .select('*')
     .eq('user_id', authed.user.id)
     .order('created_at', { ascending: false })
     .limit(50)
   if (error) return res.status(500).json({ error: error.message })
-  res.json(data || [])
+
+  const rows = data || []
+  const imageIds = Array.from(new Set(rows.map((row: any) => row.result_image_id).filter(Boolean)))
+  if (imageIds.length === 0) {
+    return res.json(rows.map((row: any) => ({ ...row, result_image: null })))
+  }
+
+  const { data: images, error: imageError } = await authed.supabase
+    .from('images')
+    .select('id,url')
+    .eq('user_id', authed.user.id)
+    .in('id', imageIds)
+  if (imageError) return res.status(500).json({ error: imageError.message })
+
+  const imageById = new Map((images || []).map((image: any) => [image.id, { url: image.url }]))
+  res.json(rows.map((row: any) => ({
+    ...row,
+    result_image: row.result_image_id ? imageById.get(row.result_image_id) ?? null : null,
+  })))
+})
+
+// DELETE /api/generate/history/:id
+router.delete('/history/:id', async (req, res) => {
+  const authed = req as AuthenticatedRequest
+  const { data: row, error: historyError } = await authed.supabase
+    .from('generation_history')
+    .select('*')
+    .eq('user_id', authed.user.id)
+    .eq('id', req.params.id)
+    .maybeSingle()
+  if (historyError) return res.status(500).json({ error: historyError.message })
+  if (!row) return res.status(404).json({ error: 'Generation history not found' })
+
+  const imageId = row.result_image_id as string | null
+  if (imageId) {
+    const assetCleanup = await authed.supabase
+      .from('resource_project_assets')
+      .delete()
+      .eq('user_id', authed.user.id)
+      .eq('image_id', imageId)
+    if (assetCleanup.error) return res.status(500).json({ error: assetCleanup.error.message })
+
+    const referenceCleanup = await authed.supabase
+      .from('generation_history')
+      .update({ reference_image_id: null })
+      .eq('user_id', authed.user.id)
+      .eq('reference_image_id', imageId)
+    if (referenceCleanup.error) return res.status(500).json({ error: referenceCleanup.error.message })
+
+    const resultCleanup = await authed.supabase
+      .from('generation_history')
+      .update({ result_image_id: null })
+      .eq('user_id', authed.user.id)
+      .eq('result_image_id', imageId)
+    if (resultCleanup.error) return res.status(500).json({ error: resultCleanup.error.message })
+
+    const parentCleanup = await authed.supabase
+      .from('images')
+      .update({ parent_id: null })
+      .eq('user_id', authed.user.id)
+      .eq('parent_id', imageId)
+    if (parentCleanup.error) return res.status(500).json({ error: parentCleanup.error.message })
+
+    const imageDelete = await authed.supabase
+      .from('images')
+      .delete()
+      .eq('user_id', authed.user.id)
+      .eq('id', imageId)
+    if (imageDelete.error) return res.status(500).json({ error: imageDelete.error.message })
+  }
+
+  const deleteHistory = await authed.supabase
+    .from('generation_history')
+    .delete()
+    .eq('user_id', authed.user.id)
+    .eq('id', req.params.id)
+  if (deleteHistory.error) return res.status(500).json({ error: deleteHistory.error.message })
+
+  res.json({ success: true })
 })
 
 export default router

@@ -41,9 +41,17 @@ app.use('/api/resources', resourcesRouter)
 
 // Health check
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() })
+  res.json({ status: 'ok', timestamp: new Date().toISOString(), pid: process.pid })
 })
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`)
+})
+
+server.on('error', (error: NodeJS.ErrnoException) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`Server port ${PORT} is already in use. Stop the existing process or set PORT to another value.`)
+    process.exit(1)
+  }
+  throw error
 })

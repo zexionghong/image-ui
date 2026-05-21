@@ -62,6 +62,7 @@ interface VideoGenerateStore {
   progress: number
   startedAt: number | null
   taskId: string | null
+  historyId: string | null
   status: string | null
   error: string | null
   errorDetails: {
@@ -118,6 +119,7 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
   progress: 0,
   startedAt: null,
   taskId: null,
+  historyId: null,
   status: null,
   error: null,
   errorDetails: null,
@@ -217,6 +219,7 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
       startedAt: Date.now(),
       result: null,
       taskId: null,
+      historyId: null,
       status: null,
       error: null,
       errorDetails: null,
@@ -270,7 +273,7 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
       if (submitData.error) throw new Error(submitData.error)
       if (!submitData.taskId) throw new Error('Provider did not return a task ID')
 
-      set({ taskId: submitData.taskId })
+      set({ taskId: submitData.taskId, historyId: submitData.historyId || null })
 
       const poll = async () => {
         if (!isCurrentGeneration(generationId)) return
@@ -301,6 +304,7 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
               result: statusData.videoUrl,
               generating: false,
               status: 'succeeded',
+              historyId: statusData.historyId || get().historyId,
               remoteResult: Boolean(statusData.remote),
               error: null,
               errorDetails: null,
@@ -443,6 +447,7 @@ export const useVideoGenerateStore = create<VideoGenerateStore>((set, get) => ({
       progress: 0,
       startedAt: null,
       taskId: null,
+      historyId: null,
       status: null,
       error: null,
       errorDetails: null,

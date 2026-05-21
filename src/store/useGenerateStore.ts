@@ -21,6 +21,8 @@ interface GenerateStore {
   generating: boolean
   progress: number
   result: string | null
+  resultImageId: string | null
+  generationHistoryId: string | null
   history: GenerationHistory[]
 
   setPrompt: (prompt: string) => void
@@ -37,6 +39,7 @@ interface GenerateStore {
   setInputFidelity: (v: 'low' | 'high') => void
   generate: (type: 'text2img' | 'img2img') => Promise<void>
   fetchHistory: () => Promise<void>
+  deleteHistoryItem: (id: string) => Promise<void>
   reset: () => void
 }
 
@@ -56,6 +59,8 @@ export const useGenerateStore = create<GenerateStore>((set, get) => ({
   generating: false,
   progress: 0,
   result: null,
+  resultImageId: null,
+  generationHistoryId: null,
   history: [],
 
   setPrompt: (prompt) => set({ prompt }),
@@ -89,7 +94,7 @@ export const useGenerateStore = create<GenerateStore>((set, get) => ({
   generate: async (type) => {
     const { prompt, negativePrompt, size, quality, background, outputFormat, outputCompression, n, referenceImages, maskDataUrl, inputFidelity } = get()
     const { baseUrl, apiKey, model } = useApiConfigStore.getState()
-    set({ generating: true, progress: 0, result: null })
+    set({ generating: true, progress: 0, result: null, resultImageId: null, generationHistoryId: null })
 
     try {
       const formData = new FormData()
@@ -130,11 +135,21 @@ export const useGenerateStore = create<GenerateStore>((set, get) => ({
       const data = await res.json()
 
       clearInterval(progressInterval)
-      if (!res.ok) throw new Error(data.error || `Generation failed (${res.status})`)
-      set({ progress: 100, result: data.url })
+      if (!res.ok) {
+        set({ generationHistoryId: data.generation_history_id || null })
+        throw new Error(data.error || `Generation failed (${res.status})`)
+      }
+      set({
+        progress: 100,
+        result: data.url,
+        resultImageId: data.id || null,
+        generationHistoryId: data.generation_history_id || null,
+      })
       get().fetchHistory()
     } catch (err) {
       console.error('Generation failed:', err)
+      void get().fetchHistory()
+      throw err
     } finally {
       set({ generating: false })
     }
@@ -149,6 +164,18 @@ export const useGenerateStore = create<GenerateStore>((set, get) => ({
     } catch (err) {
       console.error('Failed to fetch history:', err)
     }
+  },
+
+  deleteHistoryItem: async (id) => {
+    const res = await apiFetch(`${API_BASE}/generate/history/${id}`, { method: 'DELETE' })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error || `Failed to delete generation history (${res.status})`)
+    }
+    set((state) => ({
+      history: state.history.filter((item) => item.id !== id),
+      generationHistoryId: state.generationHistoryId === id ? null : state.generationHistoryId,
+    }))
   },
 
   reset: () => {
@@ -170,6 +197,8 @@ export const useGenerateStore = create<GenerateStore>((set, get) => ({
       generating: false,
       progress: 0,
       result: null,
+      resultImageId: null,
+      generationHistoryId: null,
     })
   },
 }))

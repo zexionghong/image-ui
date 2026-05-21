@@ -8,7 +8,7 @@ router.use(requireAuth)
 async function parseProject(req: AuthenticatedRequest, row: any) {
   const { data, error } = await req.supabase
     .from('resource_project_assets')
-    .select('id, role, sort_order, created_at, image:images(*)')
+    .select('id, role, sort_order, created_at, image_id')
     .eq('user_id', req.user.id)
     .eq('project_id', row.id)
     .order('sort_order', { ascending: true })
@@ -16,14 +16,28 @@ async function parseProject(req: AuthenticatedRequest, row: any) {
 
   if (error) throw error
 
+  const assets = data || []
+  const imageIds = Array.from(new Set(assets.map((asset: any) => asset.image_id).filter(Boolean)))
+  let imageById = new Map<string, ImageRow>()
+
+  if (imageIds.length > 0) {
+    const { data: images, error: imageError } = await req.supabase
+      .from('images')
+      .select('*')
+      .eq('user_id', req.user.id)
+      .in('id', imageIds)
+    if (imageError) throw imageError
+    imageById = new Map((images || []).map((image: any) => [image.id, image as ImageRow]))
+  }
+
   return {
     ...row,
-    assets: (data || []).map((asset: any) => ({
+    assets: assets.map((asset: any) => ({
       id: asset.id,
       role: asset.role,
       sort_order: asset.sort_order,
       created_at: asset.created_at,
-      image: serializeImageRow(asset.image as ImageRow),
+      image: imageById.has(asset.image_id) ? serializeImageRow(imageById.get(asset.image_id) as ImageRow) : null,
     })),
   }
 }
@@ -144,6 +158,13 @@ router.post('/projects/:id/assets', async (req, res) => {
 
 router.delete('/projects/:id', async (req, res) => {
   const authed = req as AuthenticatedRequest
+  const assetDelete = await authed.supabase
+    .from('resource_project_assets')
+    .delete()
+    .eq('user_id', authed.user.id)
+    .eq('project_id', req.params.id)
+  if (assetDelete.error) return res.status(500).json({ error: assetDelete.error.message })
+
   const { error } = await authed.supabase
     .from('resource_projects')
     .delete()

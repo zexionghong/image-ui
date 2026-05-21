@@ -66,39 +66,50 @@ router.post('/upload', upload.single('file'), async (req, res) => {
   const authed = req as AuthenticatedRequest
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
 
-  let width = 0
-  let height = 0
+  console.log(`[images] upload received | userId=${authed.user.id} | name=${req.file.originalname} | type=${req.file.mimetype} | size=${req.file.size}`)
+
   try {
+    let width = 0
+    let height = 0
     const meta = await sharp(req.file.buffer).metadata()
     width = meta.width || 0
     height = meta.height || 0
-  } catch {}
 
-  const stored = await persistBuffer({
-    userId: authed.user.id,
-    buffer: req.file.buffer,
-    contentType: req.file.mimetype,
-    originalName: req.file.originalname,
-  })
-
-  const { data, error } = await authed.supabase
-    .from('images')
-    .insert({
-      user_id: authed.user.id,
-      filename: stored.filename,
-      original_name: req.file.originalname,
-      url: stored.url,
-      storage_key: stored.storageKey,
-      width,
-      height,
-      size: req.file.size,
-      mime_type: req.file.mimetype,
+    const stored = await persistBuffer({
+      userId: authed.user.id,
+      buffer: req.file.buffer,
+      contentType: req.file.mimetype,
+      originalName: req.file.originalname,
     })
-    .select('*')
-    .single()
+    console.log(`[images] upload stored | storageKey=${stored.storageKey} | url=${stored.url}`)
 
-  if (error) return res.status(500).json({ error: error.message })
-  res.json(serializeImageRow(data as ImageRow))
+    const { data, error } = await authed.supabase
+      .from('images')
+      .insert({
+        user_id: authed.user.id,
+        filename: stored.filename,
+        original_name: req.file.originalname,
+        url: stored.url,
+        storage_key: stored.storageKey,
+        width,
+        height,
+        size: req.file.size,
+        mime_type: req.file.mimetype,
+      })
+      .select('*')
+      .single()
+
+    if (error) {
+      console.error('[images] upload image insert failed:', error)
+      return res.status(500).json({ error: error.message })
+    }
+
+    console.log(`[images] upload image row inserted | imageId=${data.id} | url=${data.url}`)
+    res.json(serializeImageRow(data as ImageRow))
+  } catch (err: any) {
+    console.error('[images] upload failed:', err.message)
+    res.status(500).json({ error: err.message })
+  }
 })
 
 // PATCH /api/images/:id
@@ -126,11 +137,41 @@ router.patch('/:id', async (req, res) => {
 // DELETE /api/images/:id
 router.delete('/:id', async (req, res) => {
   const authed = req as AuthenticatedRequest
+  const imageId = req.params.id
+
+  const assetCleanup = await authed.supabase
+    .from('resource_project_assets')
+    .delete()
+    .eq('user_id', authed.user.id)
+    .eq('image_id', imageId)
+  if (assetCleanup.error) return res.status(500).json({ error: assetCleanup.error.message })
+
+  const referenceCleanup = await authed.supabase
+    .from('generation_history')
+    .update({ reference_image_id: null })
+    .eq('user_id', authed.user.id)
+    .eq('reference_image_id', imageId)
+  if (referenceCleanup.error) return res.status(500).json({ error: referenceCleanup.error.message })
+
+  const resultCleanup = await authed.supabase
+    .from('generation_history')
+    .update({ result_image_id: null })
+    .eq('user_id', authed.user.id)
+    .eq('result_image_id', imageId)
+  if (resultCleanup.error) return res.status(500).json({ error: resultCleanup.error.message })
+
+  const parentCleanup = await authed.supabase
+    .from('images')
+    .update({ parent_id: null })
+    .eq('user_id', authed.user.id)
+    .eq('parent_id', imageId)
+  if (parentCleanup.error) return res.status(500).json({ error: parentCleanup.error.message })
+
   const { error } = await authed.supabase
     .from('images')
     .delete()
     .eq('user_id', authed.user.id)
-    .eq('id', req.params.id)
+    .eq('id', imageId)
 
   if (error) return res.status(500).json({ error: error.message })
   res.json({ success: true })

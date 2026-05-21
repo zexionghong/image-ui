@@ -73,9 +73,11 @@ router.post('/ai', async (req, res) => {
       reference_image_id: imageId,
       status: 'done',
     })
+      .select('id')
+      .single()
     if (history.error) throw history.error
 
-    res.json({ success: true, message: 'AI edit queued', image: serializeImageRow(row as ImageRow) })
+    res.json({ success: true, message: 'AI edit queued', image: serializeImageRow(row as ImageRow), generation_history_id: history.data.id })
   } catch (err: any) {
     res.status(500).json({ error: err.message })
   }

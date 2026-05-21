@@ -45,7 +45,10 @@ export const useImageStore = create<ImageStore>((set, get) => ({
       if (p.category) query.set('category', p.category)
 
       const res = await apiFetch(`${API_BASE}/images?${query}`)
-      if (!res.ok) throw new Error(`Failed to fetch images: ${res.status}`)
+      if (!res.ok) {
+        const detail = await res.json().catch(() => null)
+        throw new Error(detail?.error || `Failed to fetch images: ${res.status}`)
+      }
       const data: PaginatedResponse<ImageData> = await res.json()
       set({ images: data.data || [], total: data.total || 0, page: data.page || 1, pageSize: data.pageSize || 20 })
     } catch (err) {
@@ -59,13 +62,21 @@ export const useImageStore = create<ImageStore>((set, get) => ({
     const formData = new FormData()
     formData.append('file', file)
     const res = await apiFetch(`${API_BASE}/images/upload`, { method: 'POST', body: formData })
+    if (!res.ok) {
+      const detail = await res.json().catch(() => null)
+      throw new Error(detail?.error || `Failed to upload image: ${res.status}`)
+    }
     const image: ImageData = await res.json()
     set((s) => ({ images: [image, ...s.images], total: s.total + 1 }))
     return image
   },
 
   deleteImage: async (id) => {
-    await apiFetch(`${API_BASE}/images/${id}`, { method: 'DELETE' })
+    const res = await apiFetch(`${API_BASE}/images/${id}`, { method: 'DELETE' })
+    if (!res.ok) {
+      const detail = await res.json().catch(() => null)
+      throw new Error(detail?.error || `Failed to delete image: ${res.status}`)
+    }
     set((s) => ({
       images: s.images.filter((img) => img.id !== id),
       total: s.total - 1,
@@ -79,6 +90,10 @@ export const useImageStore = create<ImageStore>((set, get) => ({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     })
+    if (!res.ok) {
+      const detail = await res.json().catch(() => null)
+      throw new Error(detail?.error || `Failed to update image: ${res.status}`)
+    }
     const updated: ImageData = await res.json()
     set((s) => ({
       images: s.images.map((img) => (img.id === id ? updated : img)),

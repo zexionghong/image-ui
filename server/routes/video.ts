@@ -201,7 +201,7 @@ async function resolveResourcePathToMedia(req: AuthenticatedRequest, resourcePat
 
   const { data, error } = await req.supabase
     .from('resource_project_assets')
-    .select('image:images(*)')
+    .select('image_id')
     .eq('user_id', req.user.id)
     .eq('project_id', project.id)
     .eq('role', role)
@@ -209,7 +209,16 @@ async function resolveResourcePathToMedia(req: AuthenticatedRequest, resourcePat
     .limit(1)
     .maybeSingle()
   if (error) throw error
-  const row = (data as any)?.image
+  const imageId = (data as any)?.image_id
+  if (!imageId) return null
+
+  const { data: row, error: imageError } = await req.supabase
+    .from('images')
+    .select('*')
+    .eq('user_id', req.user.id)
+    .eq('id', imageId)
+    .maybeSingle()
+  if (imageError) throw imageError
   if (!row?.url) return null
 
   return {
@@ -452,10 +461,13 @@ router.post('/generate', videoUpload, async (req, res) => {
       parameters: JSON.parse(paramsJson),
       status: 'processing',
     })
+      .select('id')
+      .single()
     if (historyResult.error) throw historyResult.error
 
     res.json({
       taskId,
+      historyId: historyResult.data.id,
       status: data.status || 'submitted',
     })
   } catch (err: any) {
@@ -481,6 +493,7 @@ router.get('/status/:taskId', async (req, res) => {
       return res.json({
         status: 'succeeded',
         videoUrl: existingVideoUrl,
+        historyId: historyRow.id,
         imageId: historyRow.result_image_id,
       })
     }
@@ -488,6 +501,7 @@ router.get('/status/:taskId', async (req, res) => {
       return res.json({
         status: 'succeeded',
         videoUrl: historyParameters.remoteVideoUrl,
+        historyId: historyRow.id,
         remote: true,
         warning: typeof historyParameters.warning === 'string' ? historyParameters.warning : undefined,
       })
@@ -559,6 +573,7 @@ router.get('/status/:taskId', async (req, res) => {
         res.json({
           status: 'succeeded',
           videoUrl: stored.url,
+          historyId: historyRow?.id || null,
           imageId: image.id,
         })
       } catch (downloadErr: any) {
@@ -576,6 +591,7 @@ router.get('/status/:taskId', async (req, res) => {
         return res.json({
           status: 'succeeded',
           videoUrl,
+          historyId: historyRow.id,
           remote: true,
           warning: downloadErr.message,
         })

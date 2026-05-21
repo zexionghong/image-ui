@@ -1,6 +1,8 @@
 node_modules
 dist
 .worktrees/
+.pnpm-home/
+.pnpm-tmp/
 .env
 .env.local
 data/

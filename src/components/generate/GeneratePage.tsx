@@ -51,7 +51,7 @@ export function GeneratePage() {
   const {
     prompt, negativePrompt, size, quality, background, outputFormat, outputCompression, n,
     referencePreviews, maskDataUrl, inputFidelity, generating, progress, result, resultImageId, generationHistoryId, history,
-    originalPrompt, originalNegativePrompt, optimizedPrompt, optimizedNegativePrompt, intentSummary, optimizationNotes, optimizerUsedFallback,
+    originalPrompt, originalNegativePrompt, optimizedPrompt, optimizedNegativePrompt, intentSummary, optimizationNotes, optimizerSkill, optimizerUsedFallback,
     setPrompt, setNegativePrompt, setSize, setQuality, setBackground, setOutputFormat, setOutputCompression, setN,
     addReferenceImages, removeReferenceImage, setMaskDataUrl, setInputFidelity, generate, fetchHistory, deleteHistoryItem,
   } = useGenerateStore()
@@ -298,7 +298,10 @@ export function GeneratePage() {
                         <p className="text-sm font-medium">{t('optimizationLabel')}</p>
                         <p className="text-xs text-muted-foreground">{intentSummary || t('optimizationDesc')}</p>
                       </div>
-                      {optimizerUsedFallback ? <Badge variant="secondary">{t('optimizationFallback')}</Badge> : null}
+                      <div className="flex items-center gap-2">
+                        {optimizerSkill ? <Badge variant="outline">{optimizerSkill}</Badge> : null}
+                        {optimizerUsedFallback ? <Badge variant="secondary">{t('optimizationFallback')}</Badge> : null}
+                      </div>
                     </div>
                     <div className="mt-4 space-y-3">
                       <div className="space-y-1">

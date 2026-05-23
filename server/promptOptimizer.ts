@@ -1,12 +1,21 @@
+import { ChatPromptTemplate } from '@langchain/core/prompts'
+import { ChatOpenAI } from '@langchain/openai'
+import { promptOptimizationSchema } from './promptOptimizerSchema.js'
+import { freezeProtectedPromptTokens, restoreProtectedPromptTokens } from './promptTokenGuards.js'
+import { selectPromptSkill, type PromptSkillContext } from './prompt-skills/index.js'
+
 const OPTIMIZER_MODEL = process.env.OPENAI_PROMPT_OPTIMIZER_MODEL || 'gpt-4.1-mini'
 
-export type PromptOptimizationMode = 'text2img' | 'img2img'
+export type PromptOptimizationMode = 'text2img' | 'img2img' | 't2v' | 'i2v' | 'first_last' | 'multimodal' | 'continue'
 
 export interface PromptOptimizerInput {
   prompt: string
   negativePrompt?: string
   mode: PromptOptimizationMode
+  mediaKind?: 'image' | 'video'
   hasReferenceImages: boolean
+  isThreeView?: boolean
+  threeViewAngle?: string
   size: string
   quality: string
   background: string
@@ -26,6 +35,9 @@ export interface PromptOptimizerPayload {
     quality: string
     background: string
     outputFormat: string
+    mediaKind: 'image' | 'video'
+    isThreeView: boolean
+    threeViewAngle?: string
   }
 }
 
@@ -36,6 +48,8 @@ export interface PromptOptimizationResult {
   optimizedNegativePrompt: string
   intentSummary: string
   optimizationNotes: string[]
+  optimizerSkill: string
+  protectedTokens: string[]
   usedFallback: boolean
 }
 
@@ -43,6 +57,8 @@ interface PromptOptimizerFallback {
   prompt: string
   negativePrompt?: string
   reason: string
+  optimizerSkill?: string
+  protectedTokens?: string[]
 }
 
 interface RawPromptOptimizerResult {
@@ -50,6 +66,7 @@ interface RawPromptOptimizerResult {
   optimizedNegativePrompt?: unknown
   intentSummary?: unknown
   optimizationNotes?: unknown
+  optimizerSkill?: unknown
 }
 
 export function buildPromptOptimizerPayload(input: Omit<PromptOptimizerInput, 'apiKey' | 'baseUrl' | 'model'>): PromptOptimizerPayload {
@@ -63,6 +80,9 @@ export function buildPromptOptimizerPayload(input: Omit<PromptOptimizerInput, 'a
       quality: input.quality,
       background: input.background,
       outputFormat: input.outputFormat,
+      mediaKind: input.mediaKind || 'image',
+      isThreeView: Boolean(input.isThreeView),
+      threeViewAngle: input.threeViewAngle,
     },
   }
 }
@@ -77,6 +97,10 @@ export function normalizePromptOptimizerResult(
   const optimizationNotes = Array.isArray(raw.optimizationNotes)
     ? raw.optimizationNotes.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
     : []
+  const optimizerSkill = typeof raw.optimizerSkill === 'string' && raw.optimizerSkill.trim()
+    ? raw.optimizerSkill.trim()
+    : fallback?.optimizerSkill || 'base-image'
+  const protectedTokens = fallback?.protectedTokens || []
 
   if (!optimizedPrompt) {
     if (!fallback) {
@@ -90,6 +114,8 @@ export function normalizePromptOptimizerResult(
       optimizedNegativePrompt: fallback.negativePrompt || '',
       intentSummary: fallback.prompt,
       optimizationNotes: [`optimizer fallback: ${fallback.reason}`],
+      optimizerSkill,
+      protectedTokens,
       usedFallback: true,
     }
   }
@@ -101,34 +127,111 @@ export function normalizePromptOptimizerResult(
     optimizedNegativePrompt,
     intentSummary,
     optimizationNotes,
+    optimizerSkill,
+    protectedTokens,
     usedFallback: false,
   }
 }
 
-function extractJsonObject(content: string): RawPromptOptimizerResult {
-  const trimmed = content.trim()
-  if (!trimmed) return {}
-
-  try {
-    return JSON.parse(trimmed) as RawPromptOptimizerResult
-  } catch {
-    const match = trimmed.match(/\{[\s\S]*\}/)
-    if (!match) return {}
-    return JSON.parse(match[0]) as RawPromptOptimizerResult
-  }
-}
-
 export async function optimizeImagePrompt(input: PromptOptimizerInput): Promise<PromptOptimizationResult> {
-  const payload = buildPromptOptimizerPayload(input)
+  const mediaKind = input.mediaKind || 'image'
+  const skillContext: PromptSkillContext = {
+    mediaKind,
+    mode: input.mode,
+    hasReferenceImages: input.hasReferenceImages,
+    isThreeView: Boolean(input.isThreeView),
+    threeViewAngle: input.threeViewAngle,
+  }
+  const skill = selectPromptSkill(skillContext)
+  const frozen = skill.protectTokens ? freezeProtectedPromptTokens(input.prompt) : { prompt: input.prompt, tokens: [] }
+  const protectedTokens = frozen.tokens.map((token) => token.value)
+  const payload = buildPromptOptimizerPayload({
+    ...input,
+    prompt: frozen.prompt,
+    mediaKind,
+  })
   const fallback = {
     prompt: input.prompt,
     negativePrompt: input.negativePrompt || '',
+    optimizerSkill: skill.name,
+    protectedTokens,
   }
 
   if (!input.apiKey) {
     return normalizePromptOptimizerResult({}, { ...fallback, reason: 'missing-api-key' })
   }
 
+  const baseURL = (process.env.OPENAI_PROMPT_OPTIMIZER_BASE_URL || input.baseUrl).replace(/\/+$/, '')
+  const apiKey = process.env.OPENAI_PROMPT_OPTIMIZER_API_KEY || input.apiKey
+
+  try {
+    const prompt = ChatPromptTemplate.fromMessages([
+      ['system', skill.systemInstructions],
+      ['user', '{userPromptPayload}'],
+    ])
+    const llm = new ChatOpenAI({
+      model: OPTIMIZER_MODEL,
+      apiKey,
+      configuration: { baseURL },
+      temperature: 0.4,
+    })
+    const chain = prompt.pipe(
+      llm.withStructuredOutput(promptOptimizationSchema, { name: 'prompt_optimization_result' }),
+    )
+
+    const raw = await chain.invoke({
+      userPromptPayload: JSON.stringify({
+        ...payload,
+        outputContract: {
+          optimizedPrompt: 'string',
+          optimizedNegativePrompt: 'string',
+          intentSummary: 'string',
+          optimizationNotes: 'short string[]',
+          optimizerSkill: skill.name,
+        },
+        reasoningPolicy: [
+          'First identify unreasonable, conflicting, repetitive, or vague prompt parts.',
+          'Conservatively fix those issues.',
+          'Then lightly add missing visual or cinematic details when useful.',
+          'Preserve the user intent and do not replace the main subject.',
+        ],
+        protectedTokenPolicy: skill.protectTokens
+          ? {
+            placeholders: frozen.tokens,
+            rule: 'Preserve placeholders exactly and keep their order unchanged.',
+          }
+          : null,
+      }),
+    }) as RawPromptOptimizerResult
+
+    const restoredPrompt = typeof raw.optimizedPrompt === 'string' && skill.protectTokens
+      ? restoreProtectedPromptTokens(raw.optimizedPrompt, frozen.tokens)
+      : { prompt: typeof raw.optimizedPrompt === 'string' ? raw.optimizedPrompt : '', valid: true }
+
+    if (!restoredPrompt.valid) {
+      return normalizePromptOptimizerResult({}, { ...fallback, reason: 'protected-token-mismatch' })
+    }
+
+    return normalizePromptOptimizerResult({
+      ...raw,
+      optimizedPrompt: restoredPrompt.prompt,
+      optimizerSkill: skill.name,
+    }, { ...fallback, reason: 'empty-response' })
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    return normalizePromptOptimizerResult({}, { ...fallback, reason })
+  }
+}
+
+export const optimizePrompt = optimizeImagePrompt
+
+/* c8 ignore start */
+export async function optimizeImagePromptWithFetchFallback(input: PromptOptimizerInput): Promise<PromptOptimizationResult> {
+  const payload = buildPromptOptimizerPayload(input)
+  const fallback = {
+    prompt: input.prompt,
+    negativePrompt: input.negativePrompt || '',
+  }
   const base = input.baseUrl.replace(/\/+$/, '')
   const endpoint = `${base}/chat/completions`
 
@@ -170,10 +273,11 @@ export async function optimizeImagePrompt(input: PromptOptimizerInput): Promise<
 
     const data = await response.json()
     const content = data?.choices?.[0]?.message?.content
-    const raw = typeof content === 'string' ? extractJsonObject(content) : {}
+    const raw = typeof content === 'string' ? JSON.parse(content) : {}
     return normalizePromptOptimizerResult(raw, { ...fallback, reason: 'empty-response' })
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     return normalizePromptOptimizerResult({}, { ...fallback, reason })
   }
 }
+/* c8 ignore stop */

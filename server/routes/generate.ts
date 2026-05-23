@@ -20,6 +20,12 @@ function parseSize(size: string): { width: number; height: number } {
   return { width: w || 1024, height: h || 1024 }
 }
 
+function bufferToBlobPart(buffer: Buffer): BlobPart {
+  const bytes = new Uint8Array(buffer.length)
+  bytes.set(buffer)
+  return bytes
+}
+
 // Call OpenAI-compatible image API
 async function callImageApi(params: {
   prompt: string
@@ -62,12 +68,12 @@ async function callImageApi(params: {
     form.append('n', String(n))
 
     for (let i = 0; i < referenceImages!.length; i++) {
-      const blob = new Blob([referenceImages![i]], { type: 'image/png' })
+      const blob = new Blob([bufferToBlobPart(referenceImages![i])], { type: 'image/png' })
       form.append('image', blob, `reference_${i}.png`)
     }
 
     if (maskBuffer) {
-      const maskBlob = new Blob([maskBuffer], { type: 'image/png' })
+      const maskBlob = new Blob([bufferToBlobPart(maskBuffer)], { type: 'image/png' })
       form.append('mask', maskBlob, 'mask.png')
     }
     if (inputFidelity) {
@@ -165,6 +171,8 @@ export function mergeGenerationParameters(
     optimizedNegativePrompt: optimization.optimizedNegativePrompt,
     intentSummary: optimization.intentSummary,
     optimizationNotes: optimization.optimizationNotes,
+    optimizerSkill: optimization.optimizerSkill,
+    protectedTokens: optimization.protectedTokens,
     optimizerUsedFallback: optimization.usedFallback,
   }
 }
@@ -253,6 +261,9 @@ router.post('/text2img', upload.none(), async (req, res) => {
       quality: String(quality),
       background: String(background),
       outputFormat: String(outputFormat),
+      mediaKind: 'image',
+      isThreeView: String(req.body.promptContext || '') === 'three-view',
+      threeViewAngle: req.body.threeViewAngle ? String(req.body.threeViewAngle) : undefined,
       baseUrl: config.baseUrl,
       apiKey: config.apiKey,
       model: config.model,
@@ -326,6 +337,8 @@ router.post('/text2img', upload.none(), async (req, res) => {
       optimizedNegativePrompt: optimization.optimizedNegativePrompt,
       intentSummary: optimization.intentSummary,
       optimizationNotes: optimization.optimizationNotes,
+      optimizerSkill: optimization.optimizerSkill,
+      protectedTokens: optimization.protectedTokens,
       optimizerUsedFallback: optimization.usedFallback,
     })
   } catch (err: any) {
@@ -373,6 +386,9 @@ router.post('/img2img', upload.fields([
       quality: String(quality),
       background: 'auto',
       outputFormat: 'png',
+      mediaKind: 'image',
+      isThreeView: String(req.body.promptContext || '') === 'three-view',
+      threeViewAngle: req.body.threeViewAngle ? String(req.body.threeViewAngle) : undefined,
       baseUrl: config.baseUrl,
       apiKey: config.apiKey,
       model: config.model,
@@ -453,6 +469,8 @@ router.post('/img2img', upload.fields([
       optimizedNegativePrompt: optimization.optimizedNegativePrompt,
       intentSummary: optimization.intentSummary,
       optimizationNotes: optimization.optimizationNotes,
+      optimizerSkill: optimization.optimizerSkill,
+      protectedTokens: optimization.protectedTokens,
       optimizerUsedFallback: optimization.usedFallback,
     })
   } catch (err: any) {
@@ -495,7 +513,7 @@ router.get('/history', async (req, res) => {
 
 // DELETE /api/generate/history/:id
 router.delete('/history/:id', async (req, res) => {
-  const authed = req as AuthenticatedRequest
+  const authed = req as unknown as AuthenticatedRequest
   const { data: row, error: historyError } = await authed.supabase
     .from('generation_history')
     .select('*')

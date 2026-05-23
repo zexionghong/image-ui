@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1048.0",
+    "@langchain/core": "^1.1.47",
+    "@langchain/openai": "^1.4.6",
     "@radix-ui/react-accordion": "^1.2.2",
     "@radix-ui/react-alert-dialog": "^1.1.4",
     "@radix-ui/react-dialog": "^1.1.4",
@@ -45,6 +47,7 @@
     "tailwindcss": "^3.4.1",
     "tailwindcss-animate": "^1.0.7",
     "uuid": "^11.0.3",
+    "zod": "^4.4.3",
     "zustand": "^4.5.4"
   },
   "devDependencies": {

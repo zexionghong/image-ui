@@ -3,6 +3,7 @@ import {
   buildPromptOptimizerPayload,
   normalizePromptOptimizerResult,
 } from '../server/promptOptimizer'
+import { selectPromptSkill } from '../server/prompt-skills'
 import { mergeGenerationParameters } from '../server/routes/generate'
 
 const payload = buildPromptOptimizerPayload({
@@ -24,10 +25,13 @@ const normalized = normalizePromptOptimizerResult({
   optimizedNegativePrompt: 'blurry, distorted proportions',
   intentSummary: 'premium sneaker product shot',
   optimizationNotes: ['clarified subject', 'added lighting direction'],
+  optimizerSkill: 'base-image',
 })
 
 assert.equal(normalized.optimizedPrompt.includes('premium sneakers'), true)
 assert.equal(normalized.usedFallback, false)
+assert.equal(normalized.optimizerSkill, 'base-image')
+assert.deepEqual(normalized.protectedTokens, [])
 
 const fallback = normalizePromptOptimizerResult({}, {
   prompt: 'rough sketch portrait',
@@ -49,6 +53,8 @@ const parameters = mergeGenerationParameters(
     optimizedNegativePrompt: 'blurry, extra fingers',
     intentSummary: 'cinematic portrait',
     optimizationNotes: ['added lighting', 'added background control'],
+    optimizerSkill: 'base-image',
+    protectedTokens: [],
     usedFallback: false,
   }
 )
@@ -56,5 +62,33 @@ const parameters = mergeGenerationParameters(
 assert.equal(parameters.originalPrompt, 'simple portrait')
 assert.equal(String(parameters.optimizedPrompt).includes('cinematic portrait'), true)
 assert.deepEqual(parameters.optimizationNotes, ['added lighting', 'added background control'])
+
+assert.equal(selectPromptSkill({
+  mediaKind: 'image',
+  mode: 'text2img',
+  hasReferenceImages: false,
+  isThreeView: false,
+}).name, 'base-image')
+
+assert.equal(selectPromptSkill({
+  mediaKind: 'image',
+  mode: 'img2img',
+  hasReferenceImages: true,
+  isThreeView: false,
+}).name, 'img2img-identity')
+
+assert.equal(selectPromptSkill({
+  mediaKind: 'image',
+  mode: 'text2img',
+  hasReferenceImages: false,
+  isThreeView: true,
+}).name, 'three-view')
+
+assert.equal(selectPromptSkill({
+  mediaKind: 'video',
+  mode: 'multimodal',
+  hasReferenceImages: true,
+  isThreeView: false,
+}).name, 'video-scene')
 
 console.log('promptOptimizer tests passed')

@@ -29,6 +29,7 @@ interface GenerateStore {
   optimizedNegativePrompt: string | null
   intentSummary: string | null
   optimizationNotes: string[]
+  optimizerSkill: string | null
   optimizerUsedFallback: boolean
   history: GenerationHistory[]
 
@@ -74,6 +75,7 @@ export const useGenerateStore = create<GenerateStore>((set, get) => ({
   optimizedNegativePrompt: null,
   intentSummary: null,
   optimizationNotes: [],
+  optimizerSkill: null,
   optimizerUsedFallback: false,
   history: [],
 
@@ -120,6 +122,7 @@ export const useGenerateStore = create<GenerateStore>((set, get) => ({
       optimizedNegativePrompt: null,
       intentSummary: null,
       optimizationNotes: [],
+      optimizerSkill: null,
       optimizerUsedFallback: false,
     })
 
@@ -177,6 +180,7 @@ export const useGenerateStore = create<GenerateStore>((set, get) => ({
         optimizedNegativePrompt: data.optimizedNegativePrompt ?? null,
         intentSummary: data.intentSummary ?? null,
         optimizationNotes: Array.isArray(data.optimizationNotes) ? data.optimizationNotes : [],
+        optimizerSkill: data.optimizerSkill ?? null,
         optimizerUsedFallback: Boolean(data.optimizerUsedFallback),
       })
       get().fetchHistory()
@@ -239,6 +243,7 @@ export const useGenerateStore = create<GenerateStore>((set, get) => ({
       optimizedNegativePrompt: null,
       intentSummary: null,
       optimizationNotes: [],
+      optimizerSkill: null,
       optimizerUsedFallback: false,
     })
   },

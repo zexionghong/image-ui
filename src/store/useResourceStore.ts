@@ -118,6 +118,8 @@ export const useResourceStore = create<ResourceStore>((set, get) => ({
         formData.append('baseUrl', baseUrl)
         formData.append('apiKey', apiKey)
         formData.append('model', model)
+        formData.append('promptContext', 'three-view')
+        formData.append('threeViewAngle', request.angle)
 
         const useReference = request.angle === 'front'
           ? Boolean(input.sourceImageFile || input.sourceImageUrl?.trim())

@@ -2,6 +2,7 @@ import { Router, type Request } from 'express'
 import multer from 'multer'
 import path from 'path'
 import { persistBuffer } from '../mediaStorage.js'
+import { optimizePrompt, type PromptOptimizationResult } from '../promptOptimizer.js'
 import { requireAuth, type AuthenticatedRequest } from '../supabaseAuth.js'
 import {
   extractResourcePaths,
@@ -362,6 +363,15 @@ async function getExistingVideoUrl(req: AuthenticatedRequest, row: any) {
   return data?.url || ''
 }
 
+export function applyVideoPromptOptimizationResult(optimization: PromptOptimizationResult) {
+  return {
+    prompt: optimization.usedFallback ? optimization.originalPrompt : optimization.optimizedPrompt,
+    optimizerSkill: optimization.optimizerSkill,
+    protectedTokens: optimization.protectedTokens,
+    optimizerUsedFallback: optimization.usedFallback,
+  }
+}
+
 // POST /api/video/generate
 router.post('/generate', videoUpload, async (req, res) => {
   const authed = req as AuthenticatedRequest
@@ -390,9 +400,27 @@ router.post('/generate', videoUpload, async (req, res) => {
       throw new Error('Total uploaded media must not exceed 120MB')
     }
 
+    const originalPrompt = String(req.body.prompt || '')
+    const optimization = await optimizePrompt({
+      prompt: originalPrompt,
+      negativePrompt: '',
+      mediaKind: 'video',
+      mode,
+      hasReferenceImages: media.some((item) => item.fieldname === 'sourceImage' || item.fieldname === 'referenceImages'),
+      isThreeView: false,
+      size: String(req.body.aspectRatio || '16:9'),
+      quality: String(req.body.resolution || '720p'),
+      background: '',
+      outputFormat: 'mp4',
+      baseUrl: config.baseUrl,
+      apiKey: config.apiKey,
+      model: config.model,
+    })
+    const optimizedVideoPrompt = applyVideoPromptOptimizationResult(optimization)
+
     const input: SeedanceGenerateInput = {
       mode,
-      prompt: String(req.body.prompt || ''),
+      prompt: optimizedVideoPrompt.prompt,
       duration,
       resolution: String(req.body.resolution || '720p'),
       aspectRatio: String(req.body.aspectRatio || '16:9'),
@@ -453,11 +481,18 @@ router.post('/generate', videoUpload, async (req, res) => {
       videoBaseUrl: providerBaseUrl,
       videoApiKey: config.apiKey,
       providerTaskId: taskId,
+      originalPrompt: optimization.originalPrompt,
+      optimizedPrompt: optimization.optimizedPrompt,
+      intentSummary: optimization.intentSummary,
+      optimizationNotes: optimization.optimizationNotes,
+      optimizerSkill: optimization.optimizerSkill,
+      protectedTokens: optimization.protectedTokens,
+      optimizerUsedFallback: optimization.usedFallback,
     })
     const historyResult = await authed.supabase.from('generation_history').insert({
       user_id: authed.user.id,
       type: 'video',
-      prompt: input.prompt,
+      prompt: originalPrompt,
       parameters: JSON.parse(paramsJson),
       status: 'processing',
     })
@@ -469,6 +504,12 @@ router.post('/generate', videoUpload, async (req, res) => {
       taskId,
       historyId: historyResult.data.id,
       status: data.status || 'submitted',
+      originalPrompt: optimization.originalPrompt,
+      optimizedPrompt: optimization.optimizedPrompt,
+      intentSummary: optimization.intentSummary,
+      optimizationNotes: optimization.optimizationNotes,
+      optimizerSkill: optimization.optimizerSkill,
+      optimizerUsedFallback: optimization.usedFallback,
     })
   } catch (err: any) {
     console.error('[video] Generate failed:', err.message)
@@ -478,7 +519,7 @@ router.post('/generate', videoUpload, async (req, res) => {
 
 // GET /api/video/status/:taskId
 router.get('/status/:taskId', async (req, res) => {
-  const authed = req as AuthenticatedRequest
+  const authed = req as unknown as AuthenticatedRequest
   const { taskId } = req.params
   try {
     const historyRow = await getHistoryByProviderTaskId(authed, taskId)
